@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Coin Dodger</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="game-wrapper">
+    <div id="hud">
+      <span>Score: <strong id="score">0</strong></span>
+      <span>Best: <strong id="best">0</strong></span>
+    </div>
+    <canvas id="game" width="480" height="640"></canvas>
+
+    <div id="start-screen" class="overlay">
+      <h1>Coin Dodger</h1>
+      <p>Use <kbd>&larr;</kbd> <kbd>&rarr;</kbd> <kbd>&uarr;</kbd> <kbd>&darr;</kbd> to move.</p>
+      <p>Dodge the falling blocks and grab coins for points.</p>
+      <button id="start-btn">Start Game</button>
+      <p class="hint">or press Enter</p>
+    </div>
+
+    <div id="game-over-screen" class="overlay hidden">
+      <h1>Game Over</h1>
+      <p>Score: <strong id="final-score">0</strong></p>
+      <p id="new-best" class="hidden">New best!</p>
+      <button id="restart-btn">Restart</button>
+      <p class="hint">or press Enter</p>
+    </div>
+  </div>
+  <script src="game.js"></script>
+</body>
+</html>
