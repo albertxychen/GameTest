@@ -82,12 +82,16 @@
       },
       boots: {
         name: "Flying Boots",
-        desc: "Lace up enchanted boots that speed you up and empower every arrow.",
-        stats: ["+50% arrow damage", "+30% movement speed", "Lasts 8s · Cooldown 16s"],
+        desc: "Enchanted boots: hold left click to spam arrows with no draw time.",
+        stats: ["Rapid fire, unlimited arrows", "+50% arrow damage, +30% speed", "Lasts 8s · Cooldown 16s"],
         cooldown: 16,
         duration: 8,
         damageMul: 1.5,
         speedMul: 1.3,
+        rapidInterval: 0.08,
+        rapidDamage: 2,
+        rapidSpeed: 1000,
+        rapidSpread: 0.05,
       },
     },
     warrior: {
@@ -647,6 +651,15 @@
 
   function updateBow(dt, dodging, canAct) {
     const p = player;
+    if (p.bootsT > 0) {
+      p.charging = false;
+      p.charge = 0;
+      if (mouse.left && !dodging && canAct && p.shotCd <= 0) {
+        fireRapidArrow();
+        p.shotCd = ABILITIES.archer.boots.rapidInterval;
+      }
+      return;
+    }
     if (mouse.left && !dodging && canAct && p.shotCd <= 0) {
       p.charging = true;
       p.charge = Math.min(1, p.charge + dt / BOW.drawTime);
@@ -680,6 +693,23 @@
     });
     p.kx -= dx * 40;
     p.ky -= dy * 40;
+  }
+
+  function fireRapidArrow() {
+    const p = player;
+    const boots = ABILITIES.archer.boots;
+    const angle = p.aim + rand(-boots.rapidSpread, boots.rapidSpread);
+    const dx = Math.cos(angle);
+    const dy = Math.sin(angle);
+    arrows.push({
+      x: p.x + dx * 18,
+      y: p.y - 8 + dy * 18,
+      vx: dx * boots.rapidSpeed,
+      vy: dy * boots.rapidSpeed,
+      angle,
+      damage: Math.round(boots.rapidDamage * damageMul()),
+      rapid: true,
+    });
   }
 
   function updateSword(dt, dodging, canAct) {
@@ -1786,11 +1816,11 @@
       const dx = Math.cos(a.angle);
       const dy = Math.sin(a.angle);
       ctx.save();
-      if (a.full || a.fire) {
-        ctx.shadowColor = a.fire ? "#ff6a2a" : "#ffd24a";
+      if (a.full || a.fire || a.rapid) {
+        ctx.shadowColor = a.fire ? "#ff6a2a" : a.rapid ? "#9be7ff" : "#ffd24a";
         ctx.shadowBlur = 12;
       }
-      ctx.strokeStyle = a.fire ? "#ff8a3d" : a.full ? "#ffd24a" : "#c8a878";
+      ctx.strokeStyle = a.fire ? "#ff8a3d" : a.rapid ? "#9be7ff" : a.full ? "#ffd24a" : "#c8a878";
       ctx.lineWidth = 2;
       line(a.x - dx * 22, a.y - dy * 22, a.x, a.y);
       ctx.fillStyle = "#e0e6ee";
