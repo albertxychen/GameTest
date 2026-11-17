@@ -88,7 +88,7 @@
         duration: 8,
         damageMul: 1.5,
         speedMul: 1.3,
-        rapidInterval: 0.08,
+        rapidInterval: 0.2,
         rapidDamage: 2,
         rapidSpeed: 1000,
         rapidSpread: 0.05,
