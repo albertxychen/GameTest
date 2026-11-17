@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Warlord's Arena</title>
+  <title>Boss Arena</title>
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
@@ -11,7 +11,7 @@
     <canvas id="game" width="960" height="640"></canvas>
 
     <div id="start-screen" class="overlay">
-      <h1>Warlord's Arena</h1>
+      <h1>Boss Arena</h1>
       <p class="tagline">Choose your class</p>
       <div class="class-select">
         <button class="class-card" type="button" data-class="archer">
@@ -36,9 +36,18 @@
         </button>
       </div>
       <p class="controls">
-        <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> / arrows move &nbsp;·&nbsp; mouse aims &nbsp;·&nbsp; <kbd>Space</kbd> dodge roll
+        <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> / arrows move &nbsp;·&nbsp; mouse aims &nbsp;·&nbsp; <kbd>Space</kbd> dodge roll &nbsp;·&nbsp; <kbd>Q</kbd> ability
       </p>
       <p class="tip">Fatfat telegraphs every attack. Watch the red markings on the floor.</p>
+    </div>
+
+    <div id="ability-screen" class="overlay hidden">
+      <h1 id="ability-title" class="class-title">Archer</h1>
+      <p class="tagline">Choose your ability &nbsp;·&nbsp; press <kbd>Q</kbd> in battle to use it</p>
+      <div id="ability-cards" class="class-select"></div>
+      <div class="buttons">
+        <button id="ability-back" class="secondary" type="button">Back</button>
+      </div>
     </div>
 
     <div id="victory-screen" class="overlay hidden">

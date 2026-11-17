@@ -8,6 +8,7 @@
 
   const screens = {
     start: document.getElementById("start-screen"),
+    abilities: document.getElementById("ability-screen"),
     victory: document.getElementById("victory-screen"),
     gameover: document.getElementById("gameover-screen"),
   };
@@ -15,6 +16,8 @@
   const victoryHpEl = document.getElementById("victory-hp");
   const gameoverBossHpEl = document.getElementById("gameover-boss-hp");
   const resultClassEls = document.querySelectorAll(".result-class");
+  const abilityTitleEl = document.getElementById("ability-title");
+  const abilityCardsEl = document.getElementById("ability-cards");
 
   // ---------------------------------------------------------------------------
   // Tuning
@@ -51,6 +54,72 @@
   };
   const SWORD = { duration: 0.2, cooldown: 0.4, range: 82, arc: 2.1, damage: 13, lunge: 170 };
   const SHIELD = { halfArc: 1.3, moveMul: 0.5 };
+
+  // One ability is picked per run. Active abilities are used with Q.
+  const ABILITIES = {
+    archer: {
+      rain: {
+        name: "Arrow Rain",
+        desc: "Call down a volley of arrows on the spot under your cursor.",
+        stats: ["24 arrows over 1.2s", "4 damage each", "Cooldown 15s"],
+        cooldown: 15,
+        radius: 90,
+        delay: 0.5,
+        duration: 1.2,
+        arrows: 24,
+        damage: 4,
+      },
+      flame: {
+        name: "Flaming Arrows",
+        desc: "Your next 10 arrows are set on fire and burn the boss.",
+        stats: ["+3 fire damage per hit", "Burn: 3 damage every 0.5s for 3s", "Cooldown 18s"],
+        cooldown: 18,
+        shots: 10,
+        hitDamage: 3,
+        burnDuration: 3,
+        burnTick: 0.5,
+        burnDamage: 3,
+      },
+      boots: {
+        name: "Flying Boots",
+        desc: "Lace up enchanted boots that speed you up and empower every arrow.",
+        stats: ["+50% arrow damage", "+30% movement speed", "Lasts 8s · Cooldown 16s"],
+        cooldown: 16,
+        duration: 8,
+        damageMul: 1.5,
+        speedMul: 1.3,
+      },
+    },
+    warrior: {
+      call: {
+        name: "Warrior's Call",
+        desc: "Each use permanently boosts damage and attack speed, but weighs you down.",
+        stats: ["+15% damage, +12% attack speed", "-8% move speed, +0.15s dodge cooldown", "Cooldown 10s"],
+        cooldown: 10,
+        damage: 0.15,
+        attackSpeed: 0.12,
+        moveSpeed: 0.08,
+        minMoveMul: 0.4,
+        dodgeCooldown: 0.15,
+      },
+      infernal: {
+        name: "Infernal Shield",
+        desc: "Wreathe yourself in flame. Each hit has a 50% chance to be fully blocked.",
+        stats: ["50% chance to block any hit", "Lasts 20s", "Cooldown 30s"],
+        cooldown: 30,
+        duration: 20,
+        chance: 0.5,
+      },
+      lastDance: {
+        name: "Last Dance",
+        desc: "Passive. Triggers automatically when you drop to 1 heart.",
+        stats: ["+100% damage", "+50% movement speed", "No activation needed"],
+        passive: true,
+        damageMul: 2,
+        speedMul: 1.5,
+      },
+    },
+  };
 
   const BOSS = {
     r: 30,
@@ -98,11 +167,13 @@
     down: ["ArrowDown", "KeyS"],
     dodge: ["Space"],
     block: ["ShiftLeft", "ShiftRight"],
+    ability: ["KeyQ"],
   };
   const BOUND_CODES = new Set(Object.values(BINDINGS).flat());
   const keys = new Set();
   const mouse = { x: W / 2, y: H / 2, left: false, right: false };
   let dodgeQueued = false;
+  let abilityQueued = false;
 
   const isDown = (action) => BINDINGS[action].some((code) => keys.has(code));
 
@@ -110,12 +181,19 @@
     if (BOUND_CODES.has(e.code)) e.preventDefault();
     keys.add(e.code);
     if (e.repeat) return;
-    if (BINDINGS.dodge.includes(e.code) && mode === "playing") dodgeQueued = true;
-    if (mode === "start") {
-      if (e.code === "Digit1") startGame("archer");
-      if (e.code === "Digit2") startGame("warrior");
+    if (mode === "playing") {
+      if (BINDINGS.dodge.includes(e.code)) dodgeQueued = true;
+      if (BINDINGS.ability.includes(e.code)) abilityQueued = true;
+    } else if (mode === "start") {
+      if (e.code === "Digit1") showAbilities("archer");
+      if (e.code === "Digit2") showAbilities("warrior");
+    } else if (mode === "abilities") {
+      const ids = Object.keys(ABILITIES[selectedClass]);
+      const index = ["Digit1", "Digit2", "Digit3"].indexOf(e.code);
+      if (index >= 0 && ids[index]) startGame(selectedClass, ids[index]);
+      if (e.code === "Escape" || e.code === "Backspace") showStart();
     } else if ((mode === "victory" || mode === "gameover") && e.code === "Enter") {
-      startGame(selectedClass);
+      startGame(selectedClass, selectedAbility);
     }
   });
   window.addEventListener("keyup", (e) => keys.delete(e.code));
@@ -142,33 +220,43 @@
     mouse.right = false;
   });
 
-  document.querySelectorAll(".class-card").forEach((card) =>
-    card.addEventListener("click", () => startGame(card.dataset.class))
+  document.querySelectorAll(".class-card[data-class]").forEach((card) =>
+    card.addEventListener("click", () => showAbilities(card.dataset.class))
   );
   document.querySelectorAll(".play-again").forEach((btn) =>
-    btn.addEventListener("click", () => startGame(selectedClass))
+    btn.addEventListener("click", () => startGame(selectedClass, selectedAbility))
   );
   document.querySelectorAll(".change-class").forEach((btn) => btn.addEventListener("click", showStart));
+  document.getElementById("ability-back").addEventListener("click", showStart);
 
   // ---------------------------------------------------------------------------
   // State
   // ---------------------------------------------------------------------------
 
-  // "start" | "playing" | "ending" | "victory" | "gameover"
+  // "start" | "abilities" | "playing" | "ending" | "victory" | "gameover"
   let mode = "start";
   let selectedClass = "archer";
+  let selectedAbility = "rain";
   let outcome = null;
   let endTimer = 0;
   let fightTime = 0;
   let shake = 0;
 
-  let player, boss, arrows, fireballs, particles, texts;
+  let player, boss, arrows, fireballs, rains, particles, texts;
 
-  function reset(cls) {
+  function reset(cls, abilityId) {
     const def = CLASSES[cls];
     player = {
       cls,
       def,
+      abilityId,
+      ability: ABILITIES[cls][abilityId],
+      abilityCd: 0,
+      flameShots: 0,
+      bootsT: 0,
+      callStacks: 0,
+      infernalT: 0,
+      lastDance: false,
       x: W / 2,
       y: ARENA.y + ARENA.h - 90,
       vx: 0,
@@ -222,26 +310,65 @@
       deathT: 0,
       explodeTimer: 0,
       finalBurstDone: false,
+      burnT: 0,
+      burnTick: 0,
       t: 0,
     };
     arrows = [];
     fireballs = [];
+    rains = [];
     particles = [];
     texts = [];
     fightTime = 0;
     shake = 0;
     outcome = null;
     dodgeQueued = false;
+    abilityQueued = false;
   }
 
   function hideScreens() {
     Object.values(screens).forEach((s) => s.classList.add("hidden"));
   }
 
-  function startGame(cls) {
+  function showAbilities(cls) {
+    mode = "abilities";
+    selectedClass = cls;
+    abilityTitleEl.textContent = CLASSES[cls].name;
+    abilityTitleEl.dataset.class = cls;
+    abilityCardsEl.replaceChildren(
+      ...Object.entries(ABILITIES[cls]).map(([id, a], i) => {
+        const card = document.createElement("button");
+        card.type = "button";
+        card.className = "class-card ability-card";
+        card.dataset.ability = id;
+
+        const key = document.createElement("span");
+        key.className = "key";
+        key.textContent = String(i + 1);
+        const name = document.createElement("h2");
+        name.textContent = a.name;
+        const desc = document.createElement("p");
+        desc.textContent = a.desc;
+        const stats = document.createElement("ul");
+        for (const s of a.stats) {
+          const li = document.createElement("li");
+          li.textContent = s;
+          stats.append(li);
+        }
+        card.append(key, name, desc, stats);
+        card.addEventListener("click", () => startGame(cls, id));
+        return card;
+      })
+    );
+    hideScreens();
+    screens.abilities.classList.remove("hidden");
+  }
+
+  function startGame(cls, abilityId) {
     if (mode === "playing" || mode === "ending") return;
     selectedClass = cls;
-    reset(cls);
+    selectedAbility = abilityId;
+    reset(cls, abilityId);
     mode = "playing";
     hideScreens();
   }
@@ -260,7 +387,7 @@
 
   function showEndScreen() {
     mode = outcome;
-    resultClassEls.forEach((el) => (el.textContent = player.def.name));
+    resultClassEls.forEach((el) => (el.textContent = `${player.def.name} · ${player.ability.name}`));
     if (outcome === "victory") {
       victoryTimeEl.textContent = fightTime.toFixed(1) + "s";
       victoryHpEl.textContent = player.hp;
@@ -361,6 +488,55 @@
   // Player
   // ---------------------------------------------------------------------------
 
+  function damageMul() {
+    const p = player;
+    let mul = 1;
+    if (p.bootsT > 0) mul *= ABILITIES.archer.boots.damageMul;
+    mul *= 1 + p.callStacks * ABILITIES.warrior.call.damage;
+    if (p.lastDance) mul *= ABILITIES.warrior.lastDance.damageMul;
+    return mul;
+  }
+
+  function moveMul() {
+    const p = player;
+    const call = ABILITIES.warrior.call;
+    let mul = Math.max(call.minMoveMul, 1 - p.callStacks * call.moveSpeed);
+    if (p.bootsT > 0) mul *= ABILITIES.archer.boots.speedMul;
+    if (p.lastDance) mul *= ABILITIES.warrior.lastDance.speedMul;
+    return mul;
+  }
+
+  const dodgeCooldown = () => DODGE.cooldown + player.callStacks * ABILITIES.warrior.call.dodgeCooldown;
+  const slashCooldown = () =>
+    Math.max(SWORD.duration, SWORD.cooldown / (1 + player.callStacks * ABILITIES.warrior.call.attackSpeed));
+
+  function useAbility() {
+    const p = player;
+    const a = p.ability;
+    if (a.passive || p.abilityCd > 0) return;
+    p.abilityCd = a.cooldown;
+
+    if (p.abilityId === "rain") {
+      const x = clamp(mouse.x, ARENA.x, ARENA.x + ARENA.w);
+      const y = clamp(mouse.y, ARENA.y, ARENA.y + ARENA.h);
+      rains.push({ x, y, delay: a.delay, t: 0, spawned: 0, falling: [], total: 0 });
+    } else if (p.abilityId === "flame") {
+      p.flameShots = a.shots;
+      burst(p.x, p.y - 8, { count: 20, color: "#ff8a3d", speed: 160, size: 3, life: 0.5 });
+    } else if (p.abilityId === "boots") {
+      p.bootsT = a.duration;
+      burst(p.x, p.y + 18, { count: 20, color: "#9be7ff", speed: 180, size: 3, life: 0.5 });
+    } else if (p.abilityId === "call") {
+      p.callStacks += 1;
+      ring(p.x, p.y + 10, 70, "#ffcf7a", 30);
+      floatText(p.x, p.y - 40, `WARRIOR'S CALL x${p.callStacks}`, "#ffcf7a");
+      shake = Math.max(shake, 5);
+    } else if (p.abilityId === "infernal") {
+      p.infernalT = a.duration;
+      ring(p.x, p.y, 60, "#ff6a2a", 36);
+    }
+  }
+
   function updatePlayer(dt) {
     if (!player.alive) return;
     const p = player;
@@ -371,6 +547,33 @@
     p.dodgeCd = Math.max(0, p.dodgeCd - dt);
     p.shotCd = Math.max(0, p.shotCd - dt);
     p.slashCd = Math.max(0, p.slashCd - dt);
+    p.abilityCd = Math.max(0, p.abilityCd - dt);
+    p.bootsT = Math.max(0, p.bootsT - dt);
+    p.infernalT = Math.max(0, p.infernalT - dt);
+
+    if (abilityQueued && canAct && p.dodgeT <= 0) useAbility();
+    abilityQueued = false;
+
+    if (p.abilityId === "lastDance" && !p.lastDance && p.hp === 1) {
+      p.lastDance = true;
+      ring(p.x, p.y, 90, "#ff3b5c", 48);
+      floatText(p.x, p.y - 44, "LAST DANCE!", "#ff3b5c");
+      shake = Math.max(shake, 10);
+    }
+
+    if (p.infernalT > 0 && Math.random() < 0.4) {
+      const a = Math.random() * Math.PI * 2;
+      particles.push({
+        x: p.x + Math.cos(a) * 20,
+        y: p.y + Math.sin(a) * 20,
+        vx: 0,
+        vy: -60,
+        life: 0.4,
+        maxLife: 0.4,
+        size: 4,
+        color: Math.random() < 0.5 ? "#ff6a2a" : "#ffb347",
+      });
+    }
 
     let ix = 0;
     let iy = 0;
@@ -386,7 +589,7 @@
 
     if (dodgeQueued && p.dodgeCd <= 0 && p.dodgeT <= 0 && canAct) {
       p.dodgeT = DODGE.duration;
-      p.dodgeCd = DODGE.cooldown + DODGE.duration;
+      p.dodgeCd = dodgeCooldown() + DODGE.duration;
       p.dodgeDx = len ? ix : Math.cos(p.aim);
       p.dodgeDy = len ? iy : Math.sin(p.aim);
       p.charging = false;
@@ -402,7 +605,7 @@
     if (p.cls === "archer") updateBow(dt, dodging, canAct);
     else updateSword(dt, dodging, canAct);
 
-    let speed = p.def.speed;
+    let speed = p.def.speed * moveMul();
     if (p.charging) speed *= BOW.moveMul;
     if (p.blocking) speed *= SHIELD.moveMul;
     if (p.slashT > 0) speed *= 0.7;
@@ -459,7 +662,10 @@
     const p = player;
     const c = p.charge;
     const speed = BOW.minSpeed + (BOW.maxSpeed - BOW.minSpeed) * c;
-    const damage = Math.round(BOW.minDamage + (BOW.maxDamage - BOW.minDamage) * Math.pow(c, 1.5));
+    const base = BOW.minDamage + (BOW.maxDamage - BOW.minDamage) * Math.pow(c, 1.5);
+    const damage = Math.round(base * damageMul());
+    const onFire = p.flameShots > 0;
+    if (onFire) p.flameShots -= 1;
     const dx = Math.cos(p.aim);
     const dy = Math.sin(p.aim);
     arrows.push({
@@ -470,6 +676,7 @@
       angle: p.aim,
       damage,
       full: c >= 1,
+      fire: onFire,
     });
     p.kx -= dx * 40;
     p.ky -= dy * 40;
@@ -481,7 +688,7 @@
 
     if (mouse.left && !p.blocking && !dodging && p.slashCd <= 0 && canAct) {
       p.slashT = SWORD.duration;
-      p.slashCd = SWORD.cooldown;
+      p.slashCd = slashCooldown();
       p.slashAngle = p.aim;
       p.slashSide *= -1;
       p.slashHit = false;
@@ -498,7 +705,7 @@
           p.slashHit = true;
           const hx = boss.x - Math.cos(p.slashAngle) * boss.r * 0.6;
           const hy = boss.y - Math.sin(p.slashAngle) * boss.r * 0.6;
-          damageBoss(SWORD.damage, hx, hy, "#e8f0ff");
+          damageBoss(Math.round(SWORD.damage * damageMul()), hx, hy, p.lastDance ? "#ff3b5c" : "#e8f0ff");
           shake = Math.max(shake, 4);
         }
       }
@@ -508,6 +715,16 @@
   function hurtPlayer(fromX, fromY, color) {
     const p = player;
     if (!p.alive || p.invuln > 0 || p.dodgeT > 0 || mode !== "playing") return false;
+
+    // Brief invulnerability after an Infernal Shield block so one attack can't re-roll every frame.
+    if (p.infernalT > 0 && Math.random() < ABILITIES.warrior.infernal.chance) {
+      p.invuln = 0.5;
+      ring(p.x, p.y, 45, "#ff6a2a", 28);
+      floatText(p.x, p.y - 36, "BLOCKED", "#ffb347");
+      shake = Math.max(shake, 4);
+      return true;
+    }
+
     p.hp -= 1;
     p.invuln = PLAYER.invulnTime;
     const a = Math.atan2(p.y - fromY, p.x - fromX);
@@ -701,12 +918,12 @@
     }
   }
 
-  function damageBoss(amount, x, y, color) {
+  function damageBoss(amount, x, y, color, { textColor, showText = true } = {}) {
     if (mode !== "playing" || boss.dead) return;
     boss.hp = Math.max(0, boss.hp - amount);
     boss.flash = 0.07;
     burst(x, y, { count: 6 + Math.round(amount / 3), color, speed: 180, size: 2.5, life: 0.3 });
-    floatText(x, y - 10, amount, amount >= 15 ? "#ffd24a" : "#ffffff");
+    if (showText) floatText(x, y - 10, amount, textColor || (amount >= 15 ? "#ffd24a" : "#ffffff"));
 
     if (boss.hp <= 0) {
       boss.dead = true;
@@ -752,9 +969,26 @@
     for (const a of arrows) {
       a.x += a.vx * dt;
       a.y += a.vy * dt;
+      if (a.fire && Math.random() < 0.7) {
+        particles.push({
+          x: a.x - Math.cos(a.angle) * 10,
+          y: a.y - Math.sin(a.angle) * 10,
+          vx: rand(-20, 20),
+          vy: rand(-40, 0),
+          life: 0.25,
+          maxLife: 0.25,
+          size: 4,
+          color: Math.random() < 0.5 ? "#ff6a2a" : "#ffd24a",
+        });
+      }
       if (!boss.dead && Math.hypot(a.x - boss.x, a.y - boss.y) < boss.r) {
         a.dead = true;
         damageBoss(a.damage, a.x, a.y, a.full ? "#ffd24a" : "#e8ffe0");
+        if (a.fire) {
+          const flame = ABILITIES.archer.flame;
+          damageBoss(Math.round(flame.hitDamage * damageMul()), a.x, a.y + 12, "#ff6a2a", { textColor: "#ff8a3d" });
+          boss.burnT = flame.burnDuration;
+        }
         if (a.full) shake = Math.max(shake, 4);
       } else if (!insideArena(a.x, a.y)) {
         a.dead = true;
@@ -762,6 +996,67 @@
       }
     }
     arrows = arrows.filter((a) => !a.dead);
+  }
+
+  function updateBurn(dt) {
+    if (boss.burnT <= 0 || boss.dead) return;
+    const flame = ABILITIES.archer.flame;
+    boss.burnT -= dt;
+    boss.burnTick -= dt;
+    if (boss.burnTick <= 0) {
+      boss.burnTick = flame.burnTick;
+      damageBoss(flame.burnDamage, boss.x + rand(-12, 12), boss.y - 10, "#ff6a2a", { textColor: "#ff8a3d" });
+    }
+    if (Math.random() < 0.6) {
+      particles.push({
+        x: boss.x + rand(-26, 26),
+        y: boss.y + rand(-30, 20),
+        vx: rand(-15, 15),
+        vy: rand(-90, -40),
+        life: 0.45,
+        maxLife: 0.45,
+        size: rand(3, 6),
+        color: Math.random() < 0.5 ? "#ff6a2a" : "#ffb347",
+      });
+    }
+  }
+
+  // Arrow Rain: after a short delay, arrows fall across the zone; each one that lands
+  // while the boss is inside the zone deals damage.
+  function updateRains(dt) {
+    const a = ABILITIES.archer.rain;
+    const interval = a.duration / a.arrows;
+    for (const r of rains) {
+      if (r.delay > 0) {
+        r.delay -= dt;
+        continue;
+      }
+      r.t += dt;
+      while (r.spawned < a.arrows && r.t >= r.spawned * interval) {
+        r.spawned += 1;
+        const ang = Math.random() * Math.PI * 2;
+        const d = Math.sqrt(Math.random()) * a.radius;
+        r.falling.push({ x: r.x + Math.cos(ang) * d, y: r.y + Math.sin(ang) * d, h: rand(220, 300) });
+      }
+      for (const f of r.falling) {
+        f.h -= 950 * dt;
+        if (f.h <= 0 && !f.landed) {
+          f.landed = true;
+          burst(f.x, f.y, { count: 3, color: "#d8c8a8", speed: 70, size: 2, life: 0.2 });
+          if (!boss.dead && Math.hypot(boss.x - r.x, boss.y - r.y) < a.radius + boss.r * 0.5) {
+            const dmg = Math.round(a.damage * damageMul());
+            r.total += dmg;
+            damageBoss(dmg, f.x, f.y, "#e8ffe0", { showText: false });
+          }
+        }
+      }
+      r.falling = r.falling.filter((f) => !f.landed);
+      if (r.spawned >= a.arrows && r.falling.length === 0) {
+        r.done = true;
+        if (r.total > 0) floatText(boss.x, boss.y - 60, `ARROW RAIN ${r.total}`, "#ffd24a");
+      }
+    }
+    rains = rains.filter((r) => !r.done);
   }
 
   function updateFireballs(dt) {
@@ -821,6 +1116,8 @@
       updatePlayer(dt);
       updateBoss(dt);
       updateArrows(dt);
+      updateRains(dt);
+      updateBurn(dt);
       updateFireballs(dt);
 
       if (mode === "ending") {
@@ -1065,12 +1362,13 @@
 
     if (p.charging) {
       const full = p.charge >= 1;
+      const fire = p.flameShots > 0;
       ctx.save();
-      if (full) {
-        ctx.shadowColor = "#ffd24a";
+      if (full || fire) {
+        ctx.shadowColor = fire ? "#ff6a2a" : "#ffd24a";
         ctx.shadowBlur = 12;
       }
-      ctx.strokeStyle = full ? "#ffd24a" : "#d8c8a8";
+      ctx.strokeStyle = fire ? "#ff8a3d" : full ? "#ffd24a" : "#d8c8a8";
       ctx.lineWidth = 2;
       line(pullX, pullY, pullX + dx * 28 * s, pullY + dy * 28 * s);
       ctx.restore();
@@ -1189,6 +1487,7 @@
     const gear = p.cls === "archer" ? drawBow : drawWarriorGear;
 
     drawShadow(p.x, p.y, s);
+    drawPlayerAuras();
     ctx.save();
     if (rolling) {
       ctx.globalAlpha = 0.6;
@@ -1199,9 +1498,81 @@
     }
     gear(f, "back");
     drawBody(f);
+    if (p.bootsT > 0) drawBootWings(f);
     gear(f, "front");
     ctx.restore();
     drawSlashTrail();
+  }
+
+  function drawPlayerAuras() {
+    const p = player;
+    const pulse = 1 + Math.sin(clock * 8) * 0.08;
+    const auras = [];
+    if (p.infernalT > 0) auras.push({ color: "255, 106, 42", radius: 26 });
+    if (p.lastDance) auras.push({ color: "255, 59, 92", radius: 30 });
+    if (p.bootsT > 0) auras.push({ color: "155, 231, 255", radius: 22 });
+    if (!auras.length) return;
+
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    for (const a of auras) {
+      const r = a.radius * pulse;
+      const g = ctx.createRadialGradient(p.x, p.y, r * 0.3, p.x, p.y, r * 1.4);
+      g.addColorStop(0, `rgba(${a.color}, 0.35)`);
+      g.addColorStop(1, `rgba(${a.color}, 0)`);
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, r * 1.4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = `rgba(${a.color}, 0.6)`;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.ellipse(p.x, p.y + 20, r, r * 0.35, 0, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  function drawBootWings(f) {
+    const { x, y, s } = f;
+    const flap = Math.sin(clock * 20) * 2 * s;
+    ctx.fillStyle = "#e8fbff";
+    for (const side of [-1, 1]) {
+      ctx.beginPath();
+      ctx.moveTo(x + side * 6 * s, y + 17 * s);
+      ctx.lineTo(x + side * 15 * s, y + 11 * s - flap);
+      ctx.lineTo(x + side * 12 * s, y + 18 * s);
+      ctx.closePath();
+      ctx.fill();
+    }
+  }
+
+  function drawRains() {
+    const a = ABILITIES.archer.rain;
+    for (const r of rains) {
+      const warming = r.delay > 0;
+      ctx.save();
+      ctx.strokeStyle = "#ffd24a";
+      ctx.fillStyle = "#ffd24a";
+      ctx.globalAlpha = warming ? 0.15 + (1 - r.delay / a.delay) * 0.15 : 0.18;
+      ctx.beginPath();
+      ctx.arc(r.x, r.y, a.radius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = 0.7;
+      ctx.lineWidth = 2;
+      ctx.setLineDash([10, 8]);
+      ctx.lineDashOffset = -clock * 40;
+      ctx.stroke();
+      ctx.restore();
+
+      ctx.save();
+      ctx.strokeStyle = "#e8dcc0";
+      ctx.lineWidth = 2;
+      for (const f of r.falling) {
+        line(f.x - 3, f.y - f.h - 22, f.x, f.y - f.h);
+      }
+      ctx.restore();
+    }
   }
 
   function bossSwordAngle() {
@@ -1415,11 +1786,11 @@
       const dx = Math.cos(a.angle);
       const dy = Math.sin(a.angle);
       ctx.save();
-      if (a.full) {
-        ctx.shadowColor = "#ffd24a";
+      if (a.full || a.fire) {
+        ctx.shadowColor = a.fire ? "#ff6a2a" : "#ffd24a";
         ctx.shadowBlur = 12;
       }
-      ctx.strokeStyle = a.full ? "#ffd24a" : "#c8a878";
+      ctx.strokeStyle = a.fire ? "#ff8a3d" : a.full ? "#ffd24a" : "#c8a878";
       ctx.lineWidth = 2;
       line(a.x - dx * 22, a.y - dy * 22, a.x, a.y);
       ctx.fillStyle = "#e0e6ee";
@@ -1492,7 +1863,7 @@
     const font = (size) => `bold ${size}px 'Trebuchet MS', system-ui, sans-serif`;
 
     // Boss HP bar.
-    const barW = 440;
+    const barW = 380;
     const barH = 20;
     const barX = (W - barW) / 2;
     const barY = 18;
@@ -1546,17 +1917,61 @@
       }
     }
 
+    drawAbilityHud(font);
+
     // Dodge cooldown.
     const ready = player.dodgeCd <= 0;
-    const cdFrac = ready ? 1 : 1 - player.dodgeCd / (DODGE.cooldown + DODGE.duration);
-    const dx = W - 150;
+    const cdFrac = ready ? 1 : 1 - player.dodgeCd / (dodgeCooldown() + DODGE.duration);
+    const dx = W - 134;
     ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
-    ctx.fillRect(dx, 30, 124, 10);
+    ctx.fillRect(dx, 30, 110, 10);
     ctx.fillStyle = ready ? "#ffcf7a" : "#8a7050";
-    ctx.fillRect(dx, 30, 124 * cdFrac, 10);
+    ctx.fillRect(dx, 30, 110 * cdFrac, 10);
     ctx.font = font(12);
     ctx.fillStyle = ready ? "#ffcf7a" : "#a89070";
-    ctx.fillText(ready ? "DODGE READY [SPACE]" : "DODGE", dx, 18);
+    ctx.fillText(ready ? "DODGE [SPACE]" : "DODGE", dx, 18);
+  }
+
+  function abilityStatus() {
+    const p = player;
+    const cdText = p.abilityCd > 0 ? `${p.abilityCd.toFixed(1)}s` : "READY";
+    switch (p.abilityId) {
+      case "flame":
+        return p.flameShots > 0 ? `${p.flameShots} FLAMING ARROWS` : cdText;
+      case "boots":
+        return p.bootsT > 0 ? `ACTIVE ${p.bootsT.toFixed(1)}s` : cdText;
+      case "call":
+        return `x${p.callStacks} STACKS · ${cdText}`;
+      case "infernal":
+        return p.infernalT > 0 ? `ACTIVE ${p.infernalT.toFixed(1)}s` : cdText;
+      case "lastDance":
+        return p.lastDance ? "ACTIVE!" : "PASSIVE · AT 1 HEART";
+      default:
+        return cdText;
+    }
+  }
+
+  function drawAbilityHud(font) {
+    const p = player;
+    const a = p.ability;
+    const x = 686;
+    const w = 124;
+    const active = p.bootsT > 0 || p.infernalT > 0 || p.flameShots > 0 || p.lastDance;
+    const frac = a.passive ? (p.lastDance ? 1 : 0) : p.abilityCd > 0 ? 1 - p.abilityCd / a.cooldown : 1;
+    const ready = !a.passive && p.abilityCd <= 0;
+    const color = active ? "#ff8a3d" : ready ? "#8fe3ff" : "#5a7a8a";
+
+    ctx.textAlign = "left";
+    ctx.font = font(12);
+    ctx.fillStyle = color;
+    ctx.fillText(a.passive ? a.name.toUpperCase() : `[Q] ${a.name.toUpperCase()}`, x, 18);
+    ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
+    ctx.fillRect(x, 30, w, 10);
+    ctx.fillStyle = color;
+    ctx.fillRect(x, 30, w * frac, 10);
+    ctx.font = font(10);
+    ctx.fillStyle = "rgba(255, 255, 255, 0.8)";
+    ctx.fillText(abilityStatus(), x, 51);
   }
 
   function drawReticle() {
@@ -1581,8 +1996,9 @@
     if (shake > 0) ctx.translate(rand(-shake, shake), rand(-shake, shake));
     drawArena(clock);
 
-    if (mode !== "start") {
+    if (mode !== "start" && mode !== "abilities") {
       drawTelegraphs();
+      drawRains();
       // Whoever stands lower on screen is closer to the camera, so draw them last.
       if (boss.y + 20 * BOSS.scale < player.y + 20 * PLAYER.scale) {
         drawBossFigure();
@@ -1597,7 +2013,7 @@
     drawParticles();
     ctx.restore();
 
-    if (mode !== "start") drawHud();
+    if (mode !== "start" && mode !== "abilities") drawHud();
     drawReticle();
   }
 
@@ -1616,6 +2032,6 @@
     requestAnimationFrame(loop);
   }
 
-  reset(selectedClass);
+  reset(selectedClass, selectedAbility);
   requestAnimationFrame(loop);
 })();

@@ -126,16 +126,31 @@ canvas {
 
 .class-card h2 {
   margin: 0 0 6px;
+  padding-right: 26px;
   font-size: clamp(18px, 2.7cqw, 26px);
   color: #ffcf7a;
 }
 
-.class-card[data-class="archer"] h2 {
+.class-card[data-class="archer"] h2,
+.class-title[data-class="archer"] {
   color: #8fe39a;
 }
 
-.class-card[data-class="warrior"] h2 {
+.class-card[data-class="warrior"] h2,
+.class-title[data-class="warrior"] {
   color: #8fb6ff;
+}
+
+.class-card.ability-card {
+  width: min(230px, 28cqw);
+}
+
+.overlay h1.class-title {
+  font-size: clamp(24px, 4.4cqw, 44px);
+}
+
+.ability-card h2 {
+  color: #8fe3ff;
 }
 
 .class-card p {
@@ -186,13 +201,13 @@ kbd {
 .buttons {
   display: flex;
   gap: 14px;
-  margin-top: 14px;
+  margin-top: clamp(6px, 1.4cqw, 14px);
 }
 
 button {
-  padding: 12px 32px;
+  padding: clamp(8px, 1.2cqw, 12px) clamp(20px, 3.3cqw, 32px);
   font-family: inherit;
-  font-size: 20px;
+  font-size: clamp(16px, 2.1cqw, 20px);
   font-weight: bold;
   letter-spacing: 1px;
   color: #2a1606;
