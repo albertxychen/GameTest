@@ -108,11 +108,10 @@
       },
       infernal: {
         name: "Infernal Shield",
-        desc: "Wreathe yourself in flame. Each hit has a 50% chance to be fully blocked.",
-        stats: ["50% chance to block any hit", "Lasts 20s", "Cooldown 30s"],
-        cooldown: 30,
-        duration: 20,
-        chance: 0.5,
+        desc: "Raise a flaming shield that completely blocks the next attack that hits you.",
+        stats: ["+2 max hearts (7 total)", "Blocks 1 attack per use", "Cooldown 15s"],
+        cooldown: 15,
+        bonusHp: 2,
       },
       lastDance: {
         name: "Last Dance",
@@ -250,16 +249,19 @@
 
   function reset(cls, abilityId) {
     const def = CLASSES[cls];
+    const ability = ABILITIES[cls][abilityId];
+    const maxHp = def.maxHp + (ability.bonusHp || 0);
     player = {
       cls,
       def,
       abilityId,
-      ability: ABILITIES[cls][abilityId],
+      ability,
+      maxHp,
       abilityCd: 0,
       flameShots: 0,
       bootsT: 0,
       callStacks: 0,
-      infernalT: 0,
+      infernalShield: false,
       lastDance: false,
       x: W / 2,
       y: ARENA.y + ARENA.h - 90,
@@ -268,7 +270,7 @@
       kx: 0,
       ky: 0,
       r: PLAYER.r,
-      hp: def.maxHp,
+      hp: maxHp,
       aim: -Math.PI / 2,
       walk: 0,
       moving: false,
@@ -518,6 +520,7 @@
     const p = player;
     const a = p.ability;
     if (a.passive || p.abilityCd > 0) return;
+    if (p.abilityId === "infernal" && p.infernalShield) return;
     p.abilityCd = a.cooldown;
 
     if (p.abilityId === "rain") {
@@ -536,7 +539,7 @@
       floatText(p.x, p.y - 40, `WARRIOR'S CALL x${p.callStacks}`, "#ffcf7a");
       shake = Math.max(shake, 5);
     } else if (p.abilityId === "infernal") {
-      p.infernalT = a.duration;
+      p.infernalShield = true;
       ring(p.x, p.y, 60, "#ff6a2a", 36);
     }
   }
@@ -553,8 +556,6 @@
     p.slashCd = Math.max(0, p.slashCd - dt);
     p.abilityCd = Math.max(0, p.abilityCd - dt);
     p.bootsT = Math.max(0, p.bootsT - dt);
-    p.infernalT = Math.max(0, p.infernalT - dt);
-
     if (abilityQueued && canAct && p.dodgeT <= 0) useAbility();
     abilityQueued = false;
 
@@ -565,7 +566,7 @@
       shake = Math.max(shake, 10);
     }
 
-    if (p.infernalT > 0 && Math.random() < 0.4) {
+    if (p.infernalShield && Math.random() < 0.4) {
       const a = Math.random() * Math.PI * 2;
       particles.push({
         x: p.x + Math.cos(a) * 20,
@@ -746,8 +747,9 @@
     const p = player;
     if (!p.alive || p.invuln > 0 || p.dodgeT > 0 || mode !== "playing") return false;
 
-    // Brief invulnerability after an Infernal Shield block so one attack can't re-roll every frame.
-    if (p.infernalT > 0 && Math.random() < ABILITIES.warrior.infernal.chance) {
+    // Brief invulnerability after an Infernal Shield block so the rest of a spread can't land instantly.
+    if (p.infernalShield) {
+      p.infernalShield = false;
       p.invuln = 0.5;
       ring(p.x, p.y, 45, "#ff6a2a", 28);
       floatText(p.x, p.y - 36, "BLOCKED", "#ffb347");
@@ -1538,7 +1540,7 @@
     const p = player;
     const pulse = 1 + Math.sin(clock * 8) * 0.08;
     const auras = [];
-    if (p.infernalT > 0) auras.push({ color: "255, 106, 42", radius: 26 });
+    if (p.infernalShield) auras.push({ color: "255, 106, 42", radius: 26 });
     if (p.lastDance) auras.push({ color: "255, 59, 92", radius: 30 });
     if (p.bootsT > 0) auras.push({ color: "155, 231, 255", radius: 22 });
     if (!auras.length) return;
@@ -1931,7 +1933,7 @@
     ctx.font = font(13);
     ctx.fillStyle = player.cls === "archer" ? "#8fe39a" : "#8fb6ff";
     ctx.fillText(player.def.name.toUpperCase(), 26, 18);
-    for (let i = 0; i < player.def.maxHp; i++) {
+    for (let i = 0; i < player.maxHp; i++) {
       const cx = 36 + i * 26;
       heartPath(cx, 38, 20);
       if (i < player.hp) {
@@ -1973,7 +1975,7 @@
       case "call":
         return `x${p.callStacks} STACKS · ${cdText}`;
       case "infernal":
-        return p.infernalT > 0 ? `ACTIVE ${p.infernalT.toFixed(1)}s` : cdText;
+        return p.infernalShield ? (p.abilityCd > 0 ? `SHIELD UP · ${cdText}` : "SHIELD UP") : cdText;
       case "lastDance":
         return p.lastDance ? "ACTIVE!" : "PASSIVE · AT 1 HEART";
       default:
@@ -1986,7 +1988,7 @@
     const a = p.ability;
     const x = 686;
     const w = 124;
-    const active = p.bootsT > 0 || p.infernalT > 0 || p.flameShots > 0 || p.lastDance;
+    const active = p.bootsT > 0 || p.infernalShield || p.flameShots > 0 || p.lastDance;
     const frac = a.passive ? (p.lastDance ? 1 : 0) : p.abilityCd > 0 ? 1 - p.abilityCd / a.cooldown : 1;
     const ready = !a.passive && p.abilityCd <= 0;
     const color = active ? "#ff8a3d" : ready ? "#8fe3ff" : "#5a7a8a";
