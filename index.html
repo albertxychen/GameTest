@@ -34,8 +34,18 @@
             <li>Shield break stuns him 3–5s</li>
           </ul>
         </button>
+        <button class="class-card difficulty-card" type="button" data-difficulty="extreme">
+          <span class="key">3</span>
+          <h2>Extreme</h2>
+          <p>Face Toni: force-field crystals, crystal storms, lasers and minions.</p>
+          <ul>
+            <li>New boss · 2000 HP</li>
+            <li>6 attacks in random order</li>
+            <li>Rage mode at half HP</li>
+          </ul>
+        </button>
       </div>
-      <p class="tip">Fatfat telegraphs every attack. Watch the red markings on the floor.</p>
+      <p class="tip">Every attack is telegraphed. Watch the markings on the floor.</p>
     </div>
 
     <div id="class-screen" class="overlay hidden">
@@ -82,7 +92,7 @@
 
     <div id="victory-screen" class="overlay hidden">
       <h1 class="win">Victory</h1>
-      <p>Fatfat has fallen.</p>
+      <p><span class="boss-name">Fatfat</span> has fallen.</p>
       <p>Class: <strong class="result-class">Archer</strong></p>
       <p>Time: <strong id="victory-time">0.0s</strong> &nbsp;·&nbsp; Hearts left: <strong id="victory-hp">3</strong></p>
       <div class="buttons">
@@ -95,7 +105,7 @@
     <div id="gameover-screen" class="overlay hidden">
       <h1 class="lose">Game Over</h1>
       <p>Class: <strong class="result-class">Archer</strong></p>
-      <p>Fatfat HP remaining: <strong id="gameover-boss-hp">0</strong></p>
+      <p><span class="boss-name">Fatfat</span> HP remaining: <strong id="gameover-boss-hp">0</strong></p>
       <div class="buttons">
         <button class="play-again" type="button">Play Again</button>
         <button class="change-class secondary" type="button">Change Class</button>

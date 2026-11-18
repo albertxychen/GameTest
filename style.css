@@ -100,6 +100,19 @@ canvas {
   border-color: #ff7a6a;
 }
 
+.difficulty-card[data-difficulty="extreme"] h2,
+.difficulty-tag[data-difficulty="extreme"] {
+  color: #d9a8ff;
+}
+
+.difficulty-card[data-difficulty="extreme"]:hover {
+  border-color: #d9a8ff;
+}
+
+.class-card.difficulty-card {
+  width: min(230px, 28cqw);
+}
+
 .difficulty-tag {
   font-weight: bold;
   text-transform: uppercase;

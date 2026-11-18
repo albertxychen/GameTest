@@ -17,6 +17,7 @@
   const victoryHpEl = document.getElementById("victory-hp");
   const gameoverBossHpEl = document.getElementById("gameover-boss-hp");
   const resultClassEls = document.querySelectorAll(".result-class");
+  const bossNameEls = document.querySelectorAll(".boss-name");
   const abilityTitleEl = document.getElementById("ability-title");
   const abilityCardsEl = document.getElementById("ability-cards");
   const classDifficultyEl = document.getElementById("class-difficulty");
@@ -126,7 +127,30 @@
     },
   };
 
+  const FATFAT_COLORS = {
+    head: "#fff",
+    headStroke: "#c9d2de",
+    bodyLight: "#6aaeff",
+    bodyDark: "#2457c9",
+    feet: "#1a3f9a",
+    arm: "#2a62d8",
+    belly: "rgba(10, 30, 80, 0.6)",
+  };
+
+  const TONI_COLORS = {
+    head: "#d6d9de",
+    headStroke: "#a3a8b0",
+    bodyLight: "#7d838c",
+    bodyDark: "#41454c",
+    feet: "#2e3136",
+    arm: "#50555d",
+    belly: "rgba(20, 20, 25, 0.6)",
+  };
+
   const BOSS = {
+    name: "Fatfat",
+    kind: "fatfat",
+    colors: FATFAT_COLORS,
     r: 30,
     scale: 1.8,
     maxHp: 600,
@@ -164,7 +188,39 @@
         shieldHits: 3,
       },
     },
+    extreme: {
+      name: "Extreme",
+      boss: {
+        name: "Toni",
+        kind: "toni",
+        colors: TONI_COLORS,
+        maxHp: 2000,
+        speed: 125,
+        cooldown: 0.35,
+        recoverMul: 0.6,
+        chargeSpeed: 1150,
+        chargeDistance: 560,
+        windup: { nova: 0.5, charge: 0.4, laser: 0.35, crystals: 0.8, rain: 0.6, minions: 0.8 },
+      },
+    },
   };
+
+  // Toni's attacks. Cooldowns are per attack; 0 means he can use it back to back.
+  // Rage (below ENRAGE_AT) halves cooldowns and reduces damage taken.
+  const TONI = {
+    cooldowns: { crystals: 30, rain: 20, minions: 45, nova: 0, charge: 0, laser: 0 },
+    // So the big attacks don't all land in the first few seconds of the fight.
+    startCooldowns: { crystals: 8, rain: 5, minions: 12 },
+    rageDamageTaken: 0.7,
+    rageCooldownMul: 0.5,
+    crystal: { count: 4, hp: 50, r: 16 },
+    rain: { fallTime: 0.4, slack: 0.45, minWarn: 1.0, inset: 16 },
+    nova: { shots: 16, speed: 440, r: 8 },
+    laser: { lockTime: 0.3, beamTime: 0.25, width: 26 },
+    minion: { archer: 3, warrior: 4, hp: 100, r: 14, scale: 0.75, speed: 150, spawnTime: 0.5 },
+  };
+
+  const CRYSTAL_COLOR = "#c77dff";
 
   const SHIELD_COLOR = "#7fd8ff";
 
@@ -180,6 +236,11 @@
     spread: "#ff4f6a",
     charge: "#ff3b3b",
     slam: "#ff3b3b",
+    nova: "#d9a8ff",
+    laser: "#ff4fd8",
+    crystals: CRYSTAL_COLOR,
+    rain: "#ff3b3b",
+    minions: "#7fb0ff",
   };
 
   const FLASH_COLORS = {
@@ -221,6 +282,7 @@
     } else if (mode === "difficulty") {
       if (e.code === "Digit1" || e.code === "KeyE") chooseDifficulty("easy");
       if (e.code === "Digit2" || e.code === "KeyH") chooseDifficulty("hard");
+      if (e.code === "Digit3" || e.code === "KeyX") chooseDifficulty("extreme");
     } else if (mode === "classes") {
       if (e.code === "Digit1") showAbilities("archer");
       if (e.code === "Digit2") showAbilities("warrior");
@@ -287,6 +349,7 @@
   let shake = 0;
 
   let player, boss, arrows, fireballs, shockwaves, rains, particles, texts;
+  let crystals, minions, zoneRains;
 
   function reset(cls, abilityId) {
     bossStats = { ...BOSS, ...DIFFICULTIES[selectedDifficulty].boss };
@@ -330,6 +393,7 @@
       slashAngle: 0,
       slashSide: 1,
       slashHit: false,
+      slashId: 0,
       blocking: false,
     };
     boss = {
@@ -364,11 +428,19 @@
       shieldFlash: 0,
       stunT: 0,
       stunTotal: 0,
+      cds: { ...TONI.startCooldowns },
+      raged: false,
+      laserAngle: 0,
+      beamT: 0,
+      immuneTextCd: 0,
       t: 0,
     };
     arrows = [];
     fireballs = [];
     shockwaves = [];
+    crystals = [];
+    minions = [];
+    zoneRains = [];
     rains = [];
     particles = [];
     texts = [];
@@ -455,6 +527,7 @@
     mode = outcome;
     const summary = `${player.def.name} · ${player.ability.name} · ${DIFFICULTIES[selectedDifficulty].name}`;
     resultClassEls.forEach((el) => (el.textContent = summary));
+    bossNameEls.forEach((el) => (el.textContent = bossStats.name));
     if (outcome === "victory") {
       victoryTimeEl.textContent = fightTime.toFixed(1) + "s";
       victoryHpEl.textContent = player.hp;
@@ -784,24 +857,38 @@
       p.slashAngle = p.aim;
       p.slashSide *= -1;
       p.slashHit = false;
+      p.slashId += 1;
       p.kx += Math.cos(p.aim) * SWORD.lunge;
       p.ky += Math.sin(p.aim) * SWORD.lunge;
     }
 
     if (p.slashT > 0) {
       p.slashT -= dt;
-      if (!p.slashHit && !boss.dead && canAct) {
-        const d = dist(p, boss);
-        const allowance = Math.asin(Math.min(1, boss.r / Math.max(d, 1)));
-        if (d - boss.r <= SWORD.range && angleDiff(angleTo(p, boss), p.slashAngle) <= SWORD.arc / 2 + allowance) {
-          p.slashHit = true;
-          const hx = boss.x - Math.cos(p.slashAngle) * boss.r * 0.6;
-          const hy = boss.y - Math.sin(p.slashAngle) * boss.r * 0.6;
-          damageBoss(Math.round(SWORD.damage * damageMul()), hx, hy, p.lastDance ? "#ff3b5c" : "#e8f0ff");
-          shake = Math.max(shake, 4);
+      if (!canAct) return;
+      const damage = Math.round(SWORD.damage * damageMul());
+      const color = p.lastDance ? "#ff3b5c" : "#e8f0ff";
+      if (!p.slashHit && !boss.dead && slashReaches(boss)) {
+        p.slashHit = true;
+        const hx = boss.x - Math.cos(p.slashAngle) * boss.r * 0.6;
+        const hy = boss.y - Math.sin(p.slashAngle) * boss.r * 0.6;
+        damageBoss(damage, hx, hy, color);
+        shake = Math.max(shake, 4);
+      }
+      for (const t of [...crystals, ...minions]) {
+        if (t.slashId !== p.slashId && t.hp > 0 && slashReaches(t)) {
+          t.slashId = p.slashId;
+          damageAdd(t, damage, t.x, t.y - 6, color);
+          shake = Math.max(shake, 3);
         }
       }
     }
+  }
+
+  function slashReaches(t) {
+    const p = player;
+    const d = dist(p, t);
+    const allowance = Math.asin(Math.min(1, t.r / Math.max(d, 1)));
+    return d - t.r <= SWORD.range && angleDiff(angleTo(p, t), p.slashAngle) <= SWORD.arc / 2 + allowance;
   }
 
   function hurtPlayer(fromX, fromY, color) {
@@ -857,6 +944,7 @@
   // ---------------------------------------------------------------------------
 
   function chooseAttack() {
+    if (bossStats.kind === "toni") return chooseToniAttack();
     const d = dist(player, boss);
     if (d < bossStats.slamTriggerDist && boss.lastAttack !== "slam") return "slam";
     const options = ["aimed", "spread", "charge"].filter((a) => a !== boss.lastAttack);
@@ -879,7 +967,11 @@
     let vx = 0;
     let vy = 0;
 
-    if (boss.state !== "charge" && boss.state !== "stunned") boss.aim = angleTo(boss, player);
+    if (bossStats.kind === "toni") updateToniTimers(dt, enraged);
+
+    if (boss.state !== "charge" && boss.state !== "stunned" && boss.state !== "laser") {
+      boss.aim = angleTo(boss, player);
+    }
 
     if (boss.state === "move") {
       const d = dist(player, boss);
@@ -894,7 +986,7 @@
       let mx = toX * radial + -toY * boss.strafeDir * 0.6;
       let my = toY * radial + toX * boss.strafeDir * 0.6;
       const ml = Math.hypot(mx, my) || 1;
-      const speed = BOSS.speed * (enraged ? 1.3 : 1);
+      const speed = bossStats.speed * (enraged ? 1.3 : 1);
       vx = (mx / ml) * speed;
       vy = (my / ml) * speed;
 
@@ -903,7 +995,7 @@
         if (boss.attackTimer <= 0) {
           boss.attack = chooseAttack();
           boss.state = "windup";
-          boss.timer = boss.windupTotal = BOSS.windup[boss.attack] * bossStats.windupMul * (enraged ? 0.8 : 1);
+          boss.timer = boss.windupTotal = bossStats.windup[boss.attack] * bossStats.windupMul * (enraged ? 0.8 : 1);
           if (boss.attack === "charge") boss.chargeDir = boss.aim;
         }
       }
@@ -912,7 +1004,7 @@
       if (boss.attack === "charge") boss.aim = boss.chargeDir;
       if (boss.timer <= 0) executeAttack(enraged);
     } else if (boss.state === "charge") {
-      const step = BOSS.chargeSpeed * (enraged ? 1.15 : 1) * dt;
+      const step = bossStats.chargeSpeed * (enraged ? 1.15 : 1) * dt;
       boss.x += Math.cos(boss.chargeDir) * step;
       boss.y += Math.sin(boss.chargeDir) * step;
       boss.chargeLeft -= step;
@@ -947,6 +1039,9 @@
         boss.state = "move";
         boss.attackTimer = bossStats.cooldown * (enraged ? 0.55 : 0.8);
       }
+    } else if (boss.state === "laser") {
+      boss.timer -= dt;
+      if (boss.timer <= 0) fireLaser(enraged);
     } else if (boss.state === "stunned") {
       boss.stunT -= dt;
       if (boss.stunT <= 0) {
@@ -1007,8 +1102,10 @@
       boss.attackTimer = bossStats.cooldown * (enraged ? 0.6 : 1);
     } else if (type === "charge") {
       boss.state = "charge";
-      boss.chargeLeft = BOSS.chargeDistance;
+      boss.chargeLeft = bossStats.chargeDistance;
       boss.chargeHit = false;
+    } else if (type === "nova" || type === "laser" || type === "crystals" || type === "rain" || type === "minions") {
+      executeToniAttack(type, enraged);
     } else if (type === "slam") {
       const feetY = boss.y + 16 * BOSS.scale;
       ring(boss.x, feetY, bossStats.slamRadius, "#ff6a3d", 48);
@@ -1032,6 +1129,15 @@
       if (hit) hitBossShield(x, y);
       return;
     }
+    if (crystals.length) {
+      burst(x, y, { count: 6, color: CRYSTAL_COLOR, speed: 160, size: 2.5, life: 0.25 });
+      if (hit && boss.immuneTextCd <= 0) {
+        boss.immuneTextCd = 0.6;
+        floatText(x, y - 10, "IMMUNE", CRYSTAL_COLOR);
+      }
+      return;
+    }
+    if (bossStats.kind === "toni" && isEnraged()) amount = Math.max(1, Math.round(amount * TONI.rageDamageTaken));
     boss.hp = Math.max(0, boss.hp - amount);
     boss.flash = 0.07;
     burst(x, y, { count: 6 + Math.round(amount / 3), color, speed: 180, size: 2.5, life: 0.3 });
@@ -1045,6 +1151,12 @@
         burst(f.x, f.y, { count: 6, color: f.color, speed: 120, size: 2.5, life: 0.3 });
       }
       fireballs = [];
+      for (const t of [...crystals, ...minions]) {
+        burst(t.x, t.y, { count: 20, color: t.kind === "crystal" ? CRYSTAL_COLOR : "#6aaeff", speed: 220, size: 3, life: 0.5 });
+      }
+      crystals = [];
+      minions = [];
+      zoneRains = [];
       beginEnding("victory");
     }
   }
@@ -1064,6 +1176,274 @@
     ring(boss.x, boss.y, 70, SHIELD_COLOR, 36);
     floatText(boss.x, boss.y - 70, "STUNNED!", "#ffe08a");
     shake = Math.max(shake, 10);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Toni (Extreme)
+  // ---------------------------------------------------------------------------
+
+  function updateToniTimers(dt, enraged) {
+    for (const id in boss.cds) boss.cds[id] = Math.max(0, boss.cds[id] - dt);
+    boss.immuneTextCd = Math.max(0, boss.immuneTextCd - dt);
+    boss.beamT = Math.max(0, boss.beamT - dt);
+    if (enraged && !boss.raged) {
+      boss.raged = true;
+      for (const id in boss.cds) boss.cds[id] *= TONI.rageCooldownMul;
+      ring(boss.x, boss.y, 110, "#ff2a2a", 48);
+      floatText(boss.x, boss.y - 80, "RAGE MODE", "#ff4f4f");
+      shake = Math.max(shake, 12);
+    }
+  }
+
+  function chooseToniAttack() {
+    const options = Object.keys(TONI.cooldowns).filter(
+      (id) => !(boss.cds[id] > 0) && id !== boss.lastAttack && !(id === "crystals" && crystals.length)
+    );
+    return options[Math.floor(Math.random() * options.length)] || "nova";
+  }
+
+  function executeToniAttack(type, enraged) {
+    const cd = TONI.cooldowns[type] * (enraged ? TONI.rageCooldownMul : 1);
+    if (cd > 0) boss.cds[type] = cd;
+    boss.attack = null;
+    boss.state = "move";
+    boss.attackTimer = bossStats.cooldown * (enraged ? 0.6 : 1);
+
+    if (type === "nova") {
+      const n = TONI.nova;
+      const cp = { x: boss.x, y: boss.y - 4 * BOSS.scale };
+      const offset = Math.random() * Math.PI * 2;
+      for (let i = 0; i < n.shots; i++) {
+        const a = offset + (i / n.shots) * Math.PI * 2;
+        const speed = n.speed * (enraged ? 1.15 : 1);
+        fireballs.push({
+          x: cp.x,
+          y: cp.y,
+          vx: Math.cos(a) * speed,
+          vy: Math.sin(a) * speed,
+          r: n.r,
+          color: ATTACK_COLORS.nova,
+          crystal: true,
+        });
+      }
+      burst(cp.x, cp.y, { count: 24, color: ATTACK_COLORS.nova, speed: 220, size: 3, life: 0.4 });
+    } else if (type === "laser") {
+      boss.state = "laser";
+      boss.laserAngle = Math.atan2(player.y - castPoint().y, player.x - castPoint().x);
+      boss.aim = boss.laserAngle;
+      boss.timer = TONI.laser.lockTime;
+    } else if (type === "crystals") {
+      spawnCrystals();
+    } else if (type === "rain") {
+      const warn = startZoneRain();
+      boss.state = "recover";
+      boss.timer = warn + 0.2;
+    } else if (type === "minions") {
+      spawnMinions();
+    }
+  }
+
+  // Distance from point p to the laser ray starting at (x, y) with angle a.
+  function distToRay(p, x, y, a) {
+    const dx = Math.cos(a);
+    const dy = Math.sin(a);
+    const t = Math.max(0, (p.x - x) * dx + (p.y - y) * dy);
+    return Math.hypot(p.x - (x + dx * t), p.y - (y + dy * t));
+  }
+
+  function fireLaser(enraged) {
+    const cp = castPoint();
+    const a = boss.laserAngle;
+    boss.beamT = TONI.laser.beamTime;
+    boss.state = "recover";
+    boss.timer = 0.35 * bossStats.recoverMul;
+    shake = Math.max(shake, 8);
+    for (let i = 0; i < 20; i++) {
+      const d = rand(30, 900);
+      burst(cp.x + Math.cos(a) * d, cp.y + Math.sin(a) * d, { count: 1, color: ATTACK_COLORS.laser, speed: 120, size: 3, life: 0.35 });
+    }
+    if (mode === "playing" && player.alive && distToRay(player, cp.x, cp.y, a) < TONI.laser.width / 2 + player.r) {
+      if (playerIsBlockingFrom(angleTo(player, boss))) blockHit(cp.x, cp.y, 380);
+      else hurtPlayer(cp.x, cp.y, ATTACK_COLORS.laser);
+    }
+  }
+
+  function spawnCrystals() {
+    const c = TONI.crystal;
+    const margin = 60;
+    crystals = [];
+    for (let i = 0; i < c.count; i++) {
+      let best = null;
+      for (let tries = 0; tries < 60; tries++) {
+        const pt = {
+          x: rand(ARENA.x + margin, ARENA.x + ARENA.w - margin),
+          y: rand(ARENA.y + margin, ARENA.y + ARENA.h - margin),
+        };
+        const ok =
+          dist(pt, boss) > 200 && dist(pt, player) > 90 && crystals.every((o) => dist(pt, o) > 160);
+        best = pt;
+        if (ok) break;
+      }
+      crystals.push({ kind: "crystal", x: best.x, y: best.y, r: c.r, hp: c.hp, maxHp: c.hp, flash: 0, slashId: 0, t: 0 });
+      burst(best.x, best.y, { count: 18, color: CRYSTAL_COLOR, speed: 200, size: 3, life: 0.5 });
+    }
+    ring(boss.x, boss.y, 80, CRYSTAL_COLOR, 36);
+    floatText(boss.x, boss.y - 80, "FORCE FIELD", CRYSTAL_COLOR);
+  }
+
+  function spawnMinions() {
+    const m = TONI.minion;
+    const count = m[player.cls];
+    for (let i = 0; i < count; i++) {
+      const a = (i / count) * Math.PI * 2 + rand(-0.3, 0.3);
+      const e = {
+        kind: "minion",
+        x: boss.x + Math.cos(a) * 70,
+        y: boss.y + Math.sin(a) * 70,
+        r: m.r,
+        hp: m.hp,
+        maxHp: m.hp,
+        flash: 0,
+        slashId: 0,
+        spawnT: m.spawnTime,
+        aim: a,
+        walk: rand(0, 6),
+        moving: false,
+        kx: 0,
+        ky: 0,
+      };
+      clampToArena(e, m.scale);
+      minions.push(e);
+      burst(e.x, e.y, { count: 14, color: "#6aaeff", speed: 160, size: 3, life: 0.45 });
+    }
+    floatText(boss.x, boss.y - 80, "MINIONS!", "#7fb0ff");
+  }
+
+  // Splits the arena into uneven cells; crystals fall on every cell but one.
+  // The warning lasts just long enough for the player to run to the safe cell.
+  function startZoneRain() {
+    const r = TONI.rain;
+    let cols = 2 + Math.floor(Math.random() * 3);
+    let rows = 1 + Math.floor(Math.random() * 2);
+    if (cols * rows < 3) rows = 2;
+    const cuts = (start, size, n) => {
+      const out = [start];
+      for (let i = 1; i < n; i++) out.push(start + (size * i) / n + rand(-0.15, 0.15) * (size / n));
+      out.push(start + size);
+      return out;
+    };
+    const xs = cuts(ARENA.x, ARENA.w, cols);
+    const ys = cuts(ARENA.y, ARENA.h, rows);
+    const cells = [];
+    for (let i = 0; i < cols; i++) {
+      for (let j = 0; j < rows; j++) cells.push({ x: xs[i], y: ys[j], w: xs[i + 1] - xs[i], h: ys[j + 1] - ys[j] });
+    }
+    const inCell = (c, p) => p.x >= c.x && p.x <= c.x + c.w && p.y >= c.y && p.y <= c.y + c.h;
+    const candidates = cells.filter((c) => !inCell(c, player));
+    const safe = candidates[Math.floor(Math.random() * candidates.length)];
+
+    const nx = clamp(player.x, safe.x + r.inset, safe.x + safe.w - r.inset);
+    const ny = clamp(player.y, safe.y + r.inset, safe.y + safe.h - r.inset);
+    const speed = player.def.speed * moveMul();
+    const warn = Math.max(r.minWarn, Math.hypot(nx - player.x, ny - player.y) / speed + r.slack);
+
+    const drops = [];
+    for (const c of cells) {
+      if (c === safe) continue;
+      const n = Math.max(3, Math.round((c.w * c.h) / 9000));
+      for (let i = 0; i < n; i++) {
+        drops.push({ x: rand(c.x + 10, c.x + c.w - 10), y: rand(c.y + 10, c.y + c.h - 10), h: rand(260, 360) });
+      }
+    }
+    zoneRains.push({ cells, safe, t: 0, warn, drops, landed: false, linger: 0.35 });
+    return warn;
+  }
+
+  function damageAdd(t, amount, x, y, color) {
+    if (t.hp <= 0) return;
+    t.hp = Math.max(0, t.hp - amount);
+    t.flash = 0.07;
+    burst(x, y, { count: 5 + Math.round(amount / 3), color, speed: 160, size: 2.5, life: 0.3 });
+    floatText(x, y - 10, amount, "#ffffff");
+    if (t.hp > 0) return;
+    const color2 = t.kind === "crystal" ? CRYSTAL_COLOR : "#6aaeff";
+    burst(t.x, t.y, { count: 30, color: color2, speed: 260, size: 3.5, life: 0.55 });
+    shake = Math.max(shake, 6);
+    if (t.kind === "crystal") {
+      crystals = crystals.filter((c) => c !== t);
+      if (!crystals.length) {
+        ring(boss.x, boss.y, 90, CRYSTAL_COLOR, 40);
+        floatText(boss.x, boss.y - 80, "FORCE FIELD DOWN", "#ffe08a");
+      }
+    } else {
+      minions = minions.filter((m) => m !== t);
+    }
+  }
+
+  function updateCrystals(dt) {
+    for (const c of crystals) {
+      c.t += dt;
+      c.flash = Math.max(0, c.flash - dt);
+    }
+  }
+
+  function updateMinions(dt) {
+    const m = TONI.minion;
+    const fighting = mode === "playing" && player.alive;
+    for (const e of minions) {
+      e.flash = Math.max(0, e.flash - dt);
+      if (e.spawnT > 0) {
+        e.spawnT -= dt;
+        continue;
+      }
+      e.aim = angleTo(e, player);
+      let vx = fighting ? Math.cos(e.aim) * m.speed : 0;
+      let vy = fighting ? Math.sin(e.aim) * m.speed : 0;
+      for (const o of minions) {
+        if (o === e) continue;
+        const d = dist(e, o);
+        if (d < e.r * 2.2 && d > 0.01) {
+          vx += ((e.x - o.x) / d) * 90;
+          vy += ((e.y - o.y) / d) * 90;
+        }
+      }
+      e.x += (vx + e.kx) * dt;
+      e.y += (vy + e.ky) * dt;
+      const decay = Math.max(0, 1 - 8 * dt);
+      e.kx *= decay;
+      e.ky *= decay;
+      e.moving = Math.hypot(vx, vy) > 10;
+      e.walk += Math.hypot(vx, vy) * dt * 0.08;
+      clampToArena(e, m.scale);
+
+      if (fighting && dist(e, player) < e.r + player.r) {
+        const away = angleTo(player, e);
+        e.kx = Math.cos(away) * 420;
+        e.ky = Math.sin(away) * 420;
+        if (playerIsBlockingFrom(away)) blockHit(e.x, e.y, 160);
+        else hurtPlayer(e.x, e.y, ATTACK_COLORS.minions);
+      }
+    }
+  }
+
+  function updateZoneRains(dt) {
+    const r = TONI.rain;
+    for (const z of zoneRains) {
+      z.t += dt;
+      if (!z.landed && z.t >= z.warn) {
+        z.landed = true;
+        shake = Math.max(shake, 12);
+        for (const d of z.drops) burst(d.x, d.y, { count: 6, color: CRYSTAL_COLOR, speed: 160, size: 3, life: 0.4 });
+        const s = z.safe;
+        const safe = player.x >= s.x && player.x <= s.x + s.w && player.y >= s.y && player.y <= s.y + s.h;
+        if (mode === "playing" && player.alive && !safe) {
+          player.dodgeT = 0;
+          hurtPlayer(player.x, player.y - 30, CRYSTAL_COLOR);
+        }
+      }
+      if (z.landed) z.linger -= dt;
+    }
+    zoneRains = zoneRains.filter((z) => z.linger > 0);
   }
 
   function updateBossDeath(dt) {
@@ -1110,7 +1490,11 @@
           color: Math.random() < 0.5 ? "#ff6a2a" : "#ffd24a",
         });
       }
-      if (!boss.dead && Math.hypot(a.x - boss.x, a.y - boss.y) < boss.r) {
+      const add = mode === "playing" && [...crystals, ...minions].find((t) => t.hp > 0 && Math.hypot(a.x - t.x, a.y - t.y) < t.r + 4);
+      if (add) {
+        a.dead = true;
+        damageAdd(add, a.damage + (a.fire ? ABILITIES.archer.flame.hitDamage : 0), a.x, a.y, a.full ? "#ffd24a" : "#e8ffe0");
+      } else if (!boss.dead && Math.hypot(a.x - boss.x, a.y - boss.y) < boss.r) {
         a.dead = true;
         damageBoss(a.damage, a.x, a.y, a.full ? "#ffd24a" : "#e8ffe0");
         if (a.fire) {
@@ -1271,6 +1655,9 @@
       updateBurn(dt);
       updateFireballs(dt);
       updateShockwaves(dt);
+      updateCrystals(dt);
+      updateMinions(dt);
+      updateZoneRains(dt);
 
       if (mode === "ending") {
         endTimer -= dt;
@@ -1735,18 +2122,20 @@
     }
     if (boss.state === "windup" && boss.attack === "charge") return boss.aim;
     if (boss.state === "charge") return boss.chargeDir;
+    if (boss.state === "laser") return boss.aim + facing * 1.4;
     if (boss.state === "recover") return Math.PI / 2 + facing * 0.5;
     if (boss.state === "stunned") return Math.PI / 2 + facing * 0.15;
     return boss.aim + facing * 1.0;
   }
 
-  // Fatfat: round white head on a big round blue body with stubby feet.
-  function drawFatfat(x, y, s, flash) {
-    const facing = Math.cos(boss.aim) >= 0 ? 1 : -1;
-    const away = Math.sin(boss.aim) < -0.35;
-    const swing = boss.moving ? Math.sin(boss.walk) * 3 * s : 0;
+  // Fatfat's model: round head on a big round body with stubby feet. Toni and
+  // the minions reuse it with their own palette. `e` supplies aim/walk/moving.
+  function drawFatfat(e, x, y, s, flash, colors, angry) {
+    const facing = Math.cos(e.aim) >= 0 ? 1 : -1;
+    const away = Math.sin(e.aim) < -0.35;
+    const swing = e.moving ? Math.sin(e.walk) * 3 * s : 0;
 
-    ctx.fillStyle = flash ? "#fff" : "#1a3f9a";
+    ctx.fillStyle = flash ? "#fff" : colors.feet;
     ctx.beginPath();
     ctx.ellipse(x - 7 * s + swing, y + 18 * s, 5 * s, 3.5 * s, 0, 0, Math.PI * 2);
     ctx.ellipse(x + 7 * s - swing, y + 18 * s, 5 * s, 3.5 * s, 0, 0, Math.PI * 2);
@@ -1757,8 +2146,8 @@
       ctx.fillStyle = "#fff";
     } else {
       const body = ctx.createRadialGradient(x - 6 * s, bodyY - 7 * s, 2 * s, x, bodyY, 18 * s);
-      body.addColorStop(0, "#6aaeff");
-      body.addColorStop(1, "#2457c9");
+      body.addColorStop(0, colors.bodyLight);
+      body.addColorStop(1, colors.bodyDark);
       ctx.fillStyle = body;
     }
     ctx.beginPath();
@@ -1771,7 +2160,7 @@
       ctx.ellipse(x - 5 * s, bodyY - 5 * s, 7 * s, 5 * s, -0.4, 0, Math.PI * 2);
       ctx.fill();
       if (!away) {
-        ctx.strokeStyle = "rgba(10, 30, 80, 0.6)";
+        ctx.strokeStyle = colors.belly;
         ctx.lineWidth = 1.2 * s;
         ctx.beginPath();
         ctx.arc(x + facing * 2 * s, bodyY + 5 * s, 1.2 * s, 0, Math.PI * 2);
@@ -1780,8 +2169,8 @@
     }
 
     const headY = y - 19 * s;
-    ctx.fillStyle = "#fff";
-    ctx.strokeStyle = flash ? "#fff" : "#c9d2de";
+    ctx.fillStyle = flash ? "#fff" : colors.head;
+    ctx.strokeStyle = flash ? "#fff" : colors.headStroke;
     ctx.lineWidth = 1.5 * s;
     ctx.beginPath();
     ctx.arc(x, headY, 10 * s, 0, Math.PI * 2);
@@ -1791,7 +2180,7 @@
     if (away || flash) return;
 
     const fx = x + facing * 3 * s;
-    const enraged = isEnraged();
+    const enraged = angry;
     ctx.fillStyle = "rgba(255, 130, 150, 0.45)";
     ctx.beginPath();
     ctx.ellipse(fx - 6 * s, headY + 3 * s, 2.2 * s, 1.4 * s, 0, 0, Math.PI * 2);
@@ -1836,7 +2225,7 @@
       y += rand(-3, 3);
     }
     const flash = boss.flash > 0;
-    const armColor = flash ? "#fff" : "#2a62d8";
+    const armColor = flash ? "#fff" : bossStats.colors.arm;
 
     drawShadow(x, y, s, 20);
 
@@ -1853,14 +2242,16 @@
     };
 
     if (swordBehind) drawGreatsword();
-    drawFatfat(x, y, s, flash);
+    drawFatfat(boss, x, y, s, flash, bossStats.colors, isEnraged());
     if (!swordBehind) drawGreatsword();
 
-    // Casting hand glows while a fireball attack winds up.
-    if (boss.state === "windup" && (boss.attack === "aimed" || boss.attack === "spread") && !boss.dead) {
-      const t = 1 - boss.timer / boss.windupTotal;
+    // Casting hand glows while a projectile or laser attack winds up.
+    const casting =
+      (boss.state === "windup" && ["aimed", "spread", "laser"].includes(boss.attack)) || boss.state === "laser";
+    if (casting && !boss.dead) {
+      const t = boss.state === "laser" ? 1 : 1 - boss.timer / boss.windupTotal;
       const cp = castPoint();
-      const color = ATTACK_COLORS[boss.attack];
+      const color = ATTACK_COLORS[boss.attack || "laser"];
       ctx.strokeStyle = armColor;
       ctx.lineWidth = 6 * s;
       ctx.lineCap = "round";
@@ -1879,7 +2270,184 @@
 
     if (boss.dead) return;
     if (boss.shield > 0) drawBossShield(x, y, s);
+    if (crystals.length) drawForceField(x, y, s);
     if (boss.state === "stunned") drawStunStars(x, y - 31 * s, s);
+  }
+
+  function drawForceField(x, y, s) {
+    const cy = y - 6 * s;
+    const pulse = 0.5 + Math.sin(boss.t * 6) * 0.5;
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    ctx.shadowColor = CRYSTAL_COLOR;
+    ctx.shadowBlur = 18;
+    ctx.fillStyle = CRYSTAL_COLOR;
+    ctx.globalAlpha = 0.1 + pulse * 0.06;
+    ctx.beginPath();
+    ctx.ellipse(x, cy, 27 * s, 32 * s, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = CRYSTAL_COLOR;
+    ctx.lineWidth = 3;
+    ctx.globalAlpha = 0.6 + pulse * 0.3;
+    ctx.setLineDash([12, 6]);
+    ctx.lineDashOffset = -boss.t * 40;
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // Tethers from each crystal to Toni, drawn under the figures.
+  function drawCrystalTethers() {
+    if (!crystals.length || boss.dead) return;
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    ctx.strokeStyle = CRYSTAL_COLOR;
+    ctx.shadowColor = CRYSTAL_COLOR;
+    ctx.shadowBlur = 10;
+    for (const c of crystals) {
+      ctx.globalAlpha = 0.35 + 0.25 * Math.sin(c.t * 10);
+      ctx.lineWidth = 2.5;
+      ctx.setLineDash([16, 8]);
+      ctx.lineDashOffset = c.t * 60;
+      line(c.x, c.y - 10, boss.x, boss.y - 6 * BOSS.scale);
+    }
+    ctx.restore();
+  }
+
+  function drawCrystals() {
+    for (const c of crystals) {
+      const bob = Math.sin(c.t * 3) * 3;
+      const cy = c.y - 10 + bob;
+      ctx.save();
+      ctx.fillStyle = "rgba(0, 0, 0, 0.35)";
+      ctx.beginPath();
+      ctx.ellipse(c.x, c.y + 14, 12, 4, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.shadowColor = CRYSTAL_COLOR;
+      ctx.shadowBlur = 18;
+      ctx.fillStyle = c.flash > 0 ? "#fff" : CRYSTAL_COLOR;
+      ctx.beginPath();
+      ctx.moveTo(c.x, cy - 22);
+      ctx.lineTo(c.x + 11, cy);
+      ctx.lineTo(c.x, cy + 18);
+      ctx.lineTo(c.x - 11, cy);
+      ctx.closePath();
+      ctx.fill();
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = "rgba(255, 255, 255, 0.45)";
+      ctx.beginPath();
+      ctx.moveTo(c.x, cy - 22);
+      ctx.lineTo(c.x + 4, cy);
+      ctx.lineTo(c.x, cy + 18);
+      ctx.lineTo(c.x - 3, cy);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+      drawMiniBar(c.x, cy - 32, 36, c.hp / c.maxHp, CRYSTAL_COLOR);
+    }
+  }
+
+  function drawMinions() {
+    const m = TONI.minion;
+    for (const e of minions) {
+      const rise = e.spawnT > 0 ? 1 - e.spawnT / m.spawnTime : 1;
+      ctx.save();
+      ctx.globalAlpha = 0.3 + rise * 0.7;
+      drawShadow(e.x, e.y, m.scale, 20);
+      drawFatfat(e, e.x, e.y, m.scale, e.flash > 0, FATFAT_COLORS, true);
+      ctx.restore();
+      drawMiniBar(e.x, e.y - 34 * m.scale - 8, 30, e.hp / e.maxHp, "#ff4f4f");
+    }
+  }
+
+  function drawMiniBar(x, y, w, frac, color) {
+    ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
+    ctx.fillRect(x - w / 2 - 1, y - 1, w + 2, 6);
+    ctx.fillStyle = color;
+    ctx.fillRect(x - w / 2, y, w * frac, 4);
+  }
+
+  function drawLaser() {
+    if (boss.dead) return;
+    const cp = castPoint();
+    const L = 1400;
+    const a = boss.laserAngle;
+    ctx.save();
+    if (boss.state === "laser") {
+      // Locked: the beam path flashes before it fires.
+      ctx.strokeStyle = ATTACK_COLORS.laser;
+      ctx.globalAlpha = 0.25 + 0.5 * Math.abs(Math.sin(boss.t * 30));
+      ctx.lineWidth = TONI.laser.width;
+      line(cp.x, cp.y, cp.x + Math.cos(a) * L, cp.y + Math.sin(a) * L);
+    }
+    if (boss.beamT > 0) {
+      const t = boss.beamT / TONI.laser.beamTime;
+      ctx.globalCompositeOperation = "lighter";
+      ctx.shadowColor = ATTACK_COLORS.laser;
+      ctx.shadowBlur = 30;
+      ctx.strokeStyle = ATTACK_COLORS.laser;
+      ctx.globalAlpha = t;
+      ctx.lineWidth = TONI.laser.width * (0.6 + t * 0.6);
+      line(cp.x, cp.y, cp.x + Math.cos(a) * L, cp.y + Math.sin(a) * L);
+      ctx.strokeStyle = "#fff";
+      ctx.lineWidth = TONI.laser.width * 0.3 * t;
+      line(cp.x, cp.y, cp.x + Math.cos(a) * L, cp.y + Math.sin(a) * L);
+    }
+    ctx.restore();
+  }
+
+  function drawZoneRains() {
+    const r = TONI.rain;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(ARENA.x, ARENA.y, ARENA.w, ARENA.h);
+    ctx.clip();
+    for (const z of zoneRains) {
+      const t = Math.min(1, z.t / z.warn);
+      for (const c of z.cells) {
+        const safe = c === z.safe;
+        ctx.fillStyle = safe ? "#5dff8a" : "#ff3b3b";
+        ctx.globalAlpha = z.landed ? (safe ? 0.12 : 0.35) * (z.linger / 0.35) : safe ? 0.14 + 0.06 * Math.sin(z.t * 10) : 0.08 + t * 0.22;
+        ctx.fillRect(c.x, c.y, c.w, c.h);
+        ctx.strokeStyle = safe ? "#5dff8a" : "#ff6a5a";
+        ctx.globalAlpha = z.landed ? 0.3 : 0.7;
+        ctx.lineWidth = 3;
+        ctx.strokeRect(c.x + 1.5, c.y + 1.5, c.w - 3, c.h - 3);
+        if (safe && !z.landed) {
+          ctx.globalAlpha = 0.9;
+          ctx.fillStyle = "#5dff8a";
+          ctx.font = "bold 22px 'Trebuchet MS', system-ui, sans-serif";
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.fillText("SAFE", c.x + c.w / 2, c.y + c.h / 2);
+        }
+      }
+      // Countdown bar across the top of the arena.
+      if (!z.landed) {
+        ctx.globalAlpha = 0.9;
+        ctx.fillStyle = "#ff3b3b";
+        ctx.fillRect(ARENA.x, ARENA.y, ARENA.w * (1 - t), 4);
+      }
+      const fallLeft = z.warn - z.t;
+      if (!z.landed && fallLeft < r.fallTime) {
+        const k = fallLeft / r.fallTime;
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = CRYSTAL_COLOR;
+        ctx.shadowColor = CRYSTAL_COLOR;
+        ctx.shadowBlur = 10;
+        for (const d of z.drops) {
+          const y = d.y - d.h * k;
+          ctx.beginPath();
+          ctx.moveTo(d.x, y - 14);
+          ctx.lineTo(d.x + 6, y);
+          ctx.lineTo(d.x, y + 8);
+          ctx.lineTo(d.x - 6, y);
+          ctx.closePath();
+          ctx.fill();
+        }
+        ctx.shadowBlur = 0;
+      }
+    }
+    ctx.restore();
   }
 
   function drawShockwaves() {
@@ -2003,7 +2571,7 @@
         line(cp.x, cp.y, cp.x + Math.cos(a) * 1200, cp.y + Math.sin(a) * 1200);
       }
     } else if (boss.attack === "charge") {
-      const len = BOSS.chargeDistance + boss.r;
+      const len = bossStats.chargeDistance + boss.r;
       ctx.translate(boss.x, boss.y);
       ctx.rotate(boss.chargeDir);
       ctx.fillStyle = color;
@@ -2015,6 +2583,38 @@
       ctx.globalAlpha = 0.6;
       ctx.lineWidth = 2;
       ctx.strokeRect(0, -boss.r, len, boss.r * 2);
+    } else if (boss.attack === "nova") {
+      const n = TONI.nova;
+      ctx.strokeStyle = color;
+      ctx.globalAlpha = 0.15 + t * 0.4;
+      ctx.lineWidth = 2;
+      for (let i = 0; i < n.shots; i++) {
+        const a = (i / n.shots) * Math.PI * 2 + boss.t;
+        const r1 = 40;
+        const r2 = 40 + 80 * t;
+        line(boss.x + Math.cos(a) * r1, boss.y + Math.sin(a) * r1, boss.x + Math.cos(a) * r2, boss.y + Math.sin(a) * r2);
+      }
+    } else if (boss.attack === "laser") {
+      // Tracking: a thin line follows the player until it locks.
+      const cp = castPoint();
+      const a = Math.atan2(player.y - cp.y, player.x - cp.x);
+      ctx.strokeStyle = color;
+      ctx.globalAlpha = 0.25 + t * 0.4;
+      ctx.lineWidth = 2;
+      ctx.setLineDash([10, 8]);
+      ctx.lineDashOffset = -boss.t * 120;
+      line(cp.x, cp.y, cp.x + Math.cos(a) * 1400, cp.y + Math.sin(a) * 1400);
+    } else if (boss.attack === "crystals" || boss.attack === "rain" || boss.attack === "minions") {
+      const fy = boss.y + 16 * BOSS.scale;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 3;
+      for (let k = 0; k < 2; k++) {
+        const r = 30 + ((t + k * 0.5) % 1) * 70;
+        ctx.globalAlpha = 0.7 * (1 - ((t + k * 0.5) % 1));
+        ctx.beginPath();
+        ctx.ellipse(boss.x, fy, r, r * 0.4, 0, 0, Math.PI * 2);
+        ctx.stroke();
+      }
     } else if (boss.attack === "slam") {
       const fy = boss.y + 16 * BOSS.scale;
       ctx.fillStyle = color;
@@ -2073,6 +2673,19 @@
       ctx.fillStyle = f.color;
       ctx.shadowColor = f.color;
       ctx.shadowBlur = 18;
+      if (f.crystal) {
+        const a = Math.atan2(f.vy, f.vx);
+        const dx = Math.cos(a);
+        const dy = Math.sin(a);
+        ctx.beginPath();
+        ctx.moveTo(f.x + dx * f.r * 1.8, f.y + dy * f.r * 1.8);
+        ctx.lineTo(f.x - dy * f.r * 0.8, f.y + dx * f.r * 0.8);
+        ctx.lineTo(f.x - dx * f.r * 1.4, f.y - dy * f.r * 1.4);
+        ctx.lineTo(f.x + dy * f.r * 0.8, f.y - dx * f.r * 0.8);
+        ctx.closePath();
+        ctx.fill();
+        continue;
+      }
       ctx.beginPath();
       ctx.arc(f.x, f.y, f.r, 0, Math.PI * 2);
       ctx.fill();
@@ -2136,8 +2749,13 @@
     ctx.fillStyle = "rgba(255, 255, 255, 0.8)";
     ctx.fillRect(barX, barY, barW * trail, barH);
     const fill = ctx.createLinearGradient(barX, 0, barX + barW, 0);
-    fill.addColorStop(0, isEnraged() ? "#ff2a2a" : "#b8322a");
-    fill.addColorStop(1, isEnraged() ? "#ff8a3d" : "#e0603a");
+    if (crystals.length) {
+      fill.addColorStop(0, "#7a3fb8");
+      fill.addColorStop(1, CRYSTAL_COLOR);
+    } else {
+      fill.addColorStop(0, isEnraged() ? "#ff2a2a" : "#b8322a");
+      fill.addColorStop(1, isEnraged() ? "#ff8a3d" : "#e0603a");
+    }
     ctx.fillStyle = fill;
     ctx.fillRect(barX, barY, barW * ratio, barH);
     ctx.strokeStyle = "rgba(255, 255, 255, 0.5)";
@@ -2150,10 +2768,11 @@
     ctx.shadowColor = "#000";
     ctx.shadowBlur = 4;
     ctx.textAlign = "left";
-    const labelParts = ["FATFAT"];
-    if (selectedDifficulty === "hard") labelParts.push("HARD");
+    const labelParts = [bossStats.name.toUpperCase()];
+    if (selectedDifficulty !== "easy") labelParts.push(DIFFICULTIES[selectedDifficulty].name.toUpperCase());
     if (boss.state === "stunned") labelParts.push("STUNNED");
-    else if (isEnraged()) labelParts.push("ENRAGED");
+    else if (crystals.length) labelParts.push("INVINCIBLE");
+    else if (isEnraged()) labelParts.push(bossStats.kind === "toni" ? "RAGE" : "ENRAGED");
     ctx.fillText(labelParts.join(" · "), barX + 8, barY + barH / 2 + 1);
     ctx.textAlign = "right";
     ctx.fillText(`${Math.ceil(boss.hp)} / ${bossStats.maxHp}`, barX + barW - 8, barY + barH / 2 + 1);
@@ -2267,9 +2886,13 @@
     drawArena(clock);
 
     if (mode !== "difficulty" && mode !== "classes" && mode !== "abilities") {
+      drawZoneRains();
       drawTelegraphs();
       drawShockwaves();
       drawRains();
+      drawCrystalTethers();
+      drawCrystals();
+      drawMinions();
       // Whoever stands lower on screen is closer to the camera, so draw them last.
       if (boss.y + 20 * BOSS.scale < player.y + 20 * PLAYER.scale) {
         drawBossFigure();
@@ -2278,6 +2901,7 @@
         drawPlayer();
         drawBossFigure();
       }
+      drawLaser();
       drawArrows();
       drawFireballs();
     }
