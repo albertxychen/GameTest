@@ -169,8 +169,9 @@
   const SHIELD_COLOR = "#7fd8ff";
 
   // Released when Fatfat's shield comes back, so the player can't stay in melee
-  // range and re-break it immediately. The knockback ignores blocking and dodging.
-  const SHOCKWAVE = { speed: 950, maxRadius: 420, knockback: 2800, warnTime: 0.6 };
+  // range and re-break it immediately. The knockback ignores blocking and dodging
+  // and reaches maxRadius; only players within damageRadius also lose a heart.
+  const SHOCKWAVE = { speed: 950, maxRadius: 420, damageRadius: 170, knockback: 2800, warnTime: 0.6 };
 
   // Below this fraction of HP Fatfat moves and attacks faster.
   const ENRAGE_AT = 0.5;
@@ -1234,7 +1235,7 @@
         w.hit = true;
         player.dodgeT = 0;
         player.blocking = false;
-        hurtPlayer(w.x, w.y, SHIELD_COLOR);
+        if (w.r <= SHOCKWAVE.damageRadius) hurtPlayer(w.x, w.y, SHIELD_COLOR);
         const a = Math.atan2(player.y - w.y, player.x - w.x);
         player.kx = Math.cos(a) * SHOCKWAVE.knockback;
         player.ky = Math.sin(a) * SHOCKWAVE.knockback;
@@ -1887,16 +1888,22 @@
     if (!boss.dead && boss.state === "stunned" && boss.stunT < SHOCKWAVE.warnTime) {
       const t = 1 - boss.stunT / SHOCKWAVE.warnTime;
       const fy = boss.y + 16 * BOSS.scale;
+      const r = SHOCKWAVE.damageRadius;
+      ctx.fillStyle = SHIELD_COLOR;
+      ctx.globalAlpha = 0.08 + t * 0.12;
+      ctx.beginPath();
+      ctx.arc(boss.x, fy, r, 0, Math.PI * 2);
+      ctx.fill();
       ctx.strokeStyle = SHIELD_COLOR;
-      ctx.globalAlpha = 0.3 + 0.5 * Math.abs(Math.sin(boss.t * 18));
+      ctx.globalAlpha = 0.4 + 0.5 * Math.abs(Math.sin(boss.t * 18));
       ctx.lineWidth = 3;
       ctx.beginPath();
-      ctx.ellipse(boss.x, fy, 30 + t * 40, (30 + t * 40) * 0.45, 0, 0, Math.PI * 2);
+      ctx.arc(boss.x, fy, r, 0, Math.PI * 2);
       ctx.stroke();
     }
     ctx.globalCompositeOperation = "lighter";
     for (const w of shockwaves) {
-      const fade = 1 - w.r / SHOCKWAVE.maxRadius;
+      const fade = (1 - w.r / SHOCKWAVE.maxRadius) * (w.r <= SHOCKWAVE.damageRadius ? 1 : 0.5);
       ctx.shadowColor = SHIELD_COLOR;
       ctx.shadowBlur = 20;
       ctx.strokeStyle = SHIELD_COLOR;
