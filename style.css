@@ -86,6 +86,26 @@ canvas {
   color: #ffcf7a;
 }
 
+.difficulty-card[data-difficulty="easy"] h2,
+.difficulty-tag[data-difficulty="easy"] {
+  color: #9dffb8;
+}
+
+.difficulty-card[data-difficulty="hard"] h2,
+.difficulty-tag[data-difficulty="hard"] {
+  color: #ff7a6a;
+}
+
+.difficulty-card[data-difficulty="hard"]:hover {
+  border-color: #ff7a6a;
+}
+
+.difficulty-tag {
+  font-weight: bold;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
 .tagline {
   font-size: clamp(15px, 2.1cqw, 20px) !important;
   opacity: 0.9;
@@ -99,6 +119,9 @@ canvas {
 
 .class-card {
   position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
   width: min(260px, 32cqw);
   margin: 0;
   padding: clamp(10px, 1.8cqw, 18px) clamp(12px, 2cqw, 20px);

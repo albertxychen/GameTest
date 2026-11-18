@@ -7,7 +7,8 @@
   const H = canvas.height;
 
   const screens = {
-    start: document.getElementById("start-screen"),
+    difficulty: document.getElementById("difficulty-screen"),
+    classes: document.getElementById("class-screen"),
     abilities: document.getElementById("ability-screen"),
     victory: document.getElementById("victory-screen"),
     gameover: document.getElementById("gameover-screen"),
@@ -18,6 +19,7 @@
   const resultClassEls = document.querySelectorAll(".result-class");
   const abilityTitleEl = document.getElementById("ability-title");
   const abilityCardsEl = document.getElementById("ability-cards");
+  const classDifficultyEl = document.getElementById("class-difficulty");
 
   // ---------------------------------------------------------------------------
   // Tuning
@@ -139,7 +141,36 @@
     chargeDistance: 480,
     slamRadius: 125,
     slamTriggerDist: 170,
+    windupMul: 1,
+    recoverMul: 1,
+    // Hits the shield absorbs before breaking; 0 means no shield.
+    shieldHits: 0,
+    stunMin: 3,
+    stunMax: 5,
   };
+
+  // Easy is the base BOSS tuning; other difficulties override parts of it.
+  const DIFFICULTIES = {
+    easy: { name: "Easy", boss: {} },
+    hard: {
+      name: "Hard",
+      boss: {
+        maxHp: 1000,
+        slamRadius: 185,
+        slamTriggerDist: 235,
+        cooldown: 0.15,
+        windupMul: 0.75,
+        recoverMul: 0.5,
+        shieldHits: 3,
+      },
+    },
+  };
+
+  const SHIELD_COLOR = "#7fd8ff";
+
+  // Released when Fatfat's shield comes back, so the player can't stay in melee
+  // range and re-break it immediately. The knockback ignores blocking and dodging.
+  const SHOCKWAVE = { speed: 950, maxRadius: 420, knockback: 2800, warnTime: 0.6 };
 
   // Below this fraction of HP Fatfat moves and attacks faster.
   const ENRAGE_AT = 0.5;
@@ -187,14 +218,18 @@
     if (mode === "playing") {
       if (BINDINGS.dodge.includes(e.code)) dodgeQueued = true;
       if (BINDINGS.ability.includes(e.code)) abilityQueued = true;
-    } else if (mode === "start") {
+    } else if (mode === "difficulty") {
+      if (e.code === "Digit1" || e.code === "KeyE") chooseDifficulty("easy");
+      if (e.code === "Digit2" || e.code === "KeyH") chooseDifficulty("hard");
+    } else if (mode === "classes") {
       if (e.code === "Digit1") showAbilities("archer");
       if (e.code === "Digit2") showAbilities("warrior");
+      if (e.code === "Escape" || e.code === "Backspace") showDifficulty();
     } else if (mode === "abilities") {
       const ids = Object.keys(ABILITIES[selectedClass]);
       const index = ["Digit1", "Digit2", "Digit3"].indexOf(e.code);
       if (index >= 0 && ids[index]) startGame(selectedClass, ids[index]);
-      if (e.code === "Escape" || e.code === "Backspace") showStart();
+      if (e.code === "Escape" || e.code === "Backspace") showClasses();
     } else if ((mode === "victory" || mode === "gameover") && e.code === "Enter") {
       startGame(selectedClass, selectedAbility);
     }
@@ -229,25 +264,32 @@
   document.querySelectorAll(".play-again").forEach((btn) =>
     btn.addEventListener("click", () => startGame(selectedClass, selectedAbility))
   );
-  document.querySelectorAll(".change-class").forEach((btn) => btn.addEventListener("click", showStart));
-  document.getElementById("ability-back").addEventListener("click", showStart);
+  document.querySelectorAll(".change-class").forEach((btn) => btn.addEventListener("click", showClasses));
+  document.getElementById("ability-back").addEventListener("click", showClasses);
+  document.getElementById("class-back").addEventListener("click", showDifficulty);
+  document.querySelectorAll(".difficulty-card").forEach((card) =>
+    card.addEventListener("click", () => chooseDifficulty(card.dataset.difficulty))
+  );
 
   // ---------------------------------------------------------------------------
   // State
   // ---------------------------------------------------------------------------
 
-  // "start" | "abilities" | "playing" | "ending" | "victory" | "gameover"
-  let mode = "start";
+  // "difficulty" | "classes" | "abilities" | "playing" | "ending" | "victory" | "gameover"
+  let mode = "difficulty";
   let selectedClass = "archer";
   let selectedAbility = "rain";
+  let selectedDifficulty = "easy";
+  let bossStats = BOSS;
   let outcome = null;
   let endTimer = 0;
   let fightTime = 0;
   let shake = 0;
 
-  let player, boss, arrows, fireballs, rains, particles, texts;
+  let player, boss, arrows, fireballs, shockwaves, rains, particles, texts;
 
   function reset(cls, abilityId) {
+    bossStats = { ...BOSS, ...DIFFICULTIES[selectedDifficulty].boss };
     const def = CLASSES[cls];
     const ability = ABILITIES[cls][abilityId];
     const maxHp = def.maxHp + (ability.bonusHp || 0);
@@ -294,8 +336,8 @@
       x: W / 2,
       y: ARENA.y + 130,
       r: BOSS.r,
-      hp: BOSS.maxHp,
-      displayHp: BOSS.maxHp,
+      hp: bossStats.maxHp,
+      displayHp: bossStats.maxHp,
       flash: 0,
       aim: Math.PI / 2,
       walk: 0,
@@ -318,10 +360,15 @@
       finalBurstDone: false,
       burnT: 0,
       burnTick: 0,
+      shield: bossStats.shieldHits,
+      shieldFlash: 0,
+      stunT: 0,
+      stunTotal: 0,
       t: 0,
     };
     arrows = [];
     fireballs = [];
+    shockwaves = [];
     rains = [];
     particles = [];
     texts = [];
@@ -379,10 +426,23 @@
     hideScreens();
   }
 
-  function showStart() {
-    mode = "start";
+  function showDifficulty() {
+    mode = "difficulty";
     hideScreens();
-    screens.start.classList.remove("hidden");
+    screens.difficulty.classList.remove("hidden");
+  }
+
+  function chooseDifficulty(id) {
+    selectedDifficulty = id;
+    classDifficultyEl.textContent = DIFFICULTIES[id].name;
+    classDifficultyEl.dataset.difficulty = id;
+    showClasses();
+  }
+
+  function showClasses() {
+    mode = "classes";
+    hideScreens();
+    screens.classes.classList.remove("hidden");
   }
 
   function beginEnding(result) {
@@ -393,13 +453,14 @@
 
   function showEndScreen() {
     mode = outcome;
-    resultClassEls.forEach((el) => (el.textContent = `${player.def.name} · ${player.ability.name}`));
+    const summary = `${player.def.name} · ${player.ability.name} · ${DIFFICULTIES[selectedDifficulty].name}`;
+    resultClassEls.forEach((el) => (el.textContent = summary));
     if (outcome === "victory") {
       victoryTimeEl.textContent = fightTime.toFixed(1) + "s";
       victoryHpEl.textContent = player.hp;
       screens.victory.classList.remove("hidden");
     } else {
-      gameoverBossHpEl.textContent = `${Math.ceil(boss.hp)} / ${BOSS.maxHp}`;
+      gameoverBossHpEl.textContent = `${Math.ceil(boss.hp)} / ${bossStats.maxHp}`;
       screens.gameover.classList.remove("hidden");
     }
   }
@@ -459,7 +520,7 @@
     texts.push({ x: x + rand(-8, 8), y, text, color, life: 0.7, maxLife: 0.7 });
   }
 
-  const isEnraged = () => boss.hp <= BOSS.maxHp * ENRAGE_AT;
+  const isEnraged = () => boss.hp <= bossStats.maxHp * ENRAGE_AT;
 
   // Clamps an entity's body-center position so its head and feet stay inside the arena.
   function clampToArena(e, scale) {
@@ -797,7 +858,7 @@
 
   function chooseAttack() {
     const d = dist(player, boss);
-    if (d < BOSS.slamTriggerDist && boss.lastAttack !== "slam") return "slam";
+    if (d < bossStats.slamTriggerDist && boss.lastAttack !== "slam") return "slam";
     const options = ["aimed", "spread", "charge"].filter((a) => a !== boss.lastAttack);
     return options[Math.floor(Math.random() * options.length)];
   }
@@ -805,6 +866,7 @@
   function updateBoss(dt) {
     boss.t += dt;
     boss.flash = Math.max(0, boss.flash - dt);
+    boss.shieldFlash = Math.max(0, boss.shieldFlash - dt);
     boss.displayHp += (boss.hp - boss.displayHp) * Math.min(1, dt * 4);
 
     if (boss.dead) {
@@ -817,7 +879,7 @@
     let vx = 0;
     let vy = 0;
 
-    if (boss.state !== "charge") boss.aim = angleTo(boss, player);
+    if (boss.state !== "charge" && boss.state !== "stunned") boss.aim = angleTo(boss, player);
 
     if (boss.state === "move") {
       const d = dist(player, boss);
@@ -841,7 +903,7 @@
         if (boss.attackTimer <= 0) {
           boss.attack = chooseAttack();
           boss.state = "windup";
-          boss.timer = boss.windupTotal = BOSS.windup[boss.attack] * (enraged ? 0.8 : 1);
+          boss.timer = boss.windupTotal = BOSS.windup[boss.attack] * bossStats.windupMul * (enraged ? 0.8 : 1);
           if (boss.attack === "charge") boss.chargeDir = boss.aim;
         }
       }
@@ -883,7 +945,19 @@
       boss.timer -= dt;
       if (boss.timer <= 0) {
         boss.state = "move";
-        boss.attackTimer = BOSS.cooldown * (enraged ? 0.55 : 0.8);
+        boss.attackTimer = bossStats.cooldown * (enraged ? 0.55 : 0.8);
+      }
+    } else if (boss.state === "stunned") {
+      boss.stunT -= dt;
+      if (boss.stunT <= 0) {
+        boss.state = "move";
+        boss.shield = bossStats.shieldHits;
+        boss.shieldFlash = 0.3;
+        boss.attackTimer = 0.8;
+        burst(boss.x, boss.y, { count: 24, color: SHIELD_COLOR, speed: 200, size: 3, life: 0.45 });
+        floatText(boss.x, boss.y - 70, "SHIELD UP", SHIELD_COLOR);
+        shockwaves.push({ x: boss.x, y: boss.y + 16 * BOSS.scale, r: 0, hit: false });
+        shake = Math.max(shake, 12);
       }
     }
 
@@ -900,7 +974,7 @@
 
   function endCharge(recoverTime) {
     boss.state = "recover";
-    boss.timer = recoverTime;
+    boss.timer = recoverTime * bossStats.recoverMul;
     boss.lastAttack = "charge";
     boss.attack = null;
   }
@@ -930,28 +1004,34 @@
       burst(cp.x, cp.y, { count: 14, color: ATTACK_COLORS[type], speed: 180, size: 3, life: 0.35 });
       boss.state = "move";
       boss.attack = null;
-      boss.attackTimer = BOSS.cooldown * (enraged ? 0.6 : 1);
+      boss.attackTimer = bossStats.cooldown * (enraged ? 0.6 : 1);
     } else if (type === "charge") {
       boss.state = "charge";
       boss.chargeLeft = BOSS.chargeDistance;
       boss.chargeHit = false;
     } else if (type === "slam") {
       const feetY = boss.y + 16 * BOSS.scale;
-      ring(boss.x, feetY, BOSS.slamRadius, "#ff6a3d", 48);
+      ring(boss.x, feetY, bossStats.slamRadius, "#ff6a3d", 48);
       burst(boss.x, feetY, { count: 30, color: "#c9b89a", speed: 260, size: 4, life: 0.6 });
       shake = Math.max(shake, 14);
-      if (mode === "playing" && player.alive && dist(player, boss) < BOSS.slamRadius + player.r) {
+      if (mode === "playing" && player.alive && dist(player, boss) < bossStats.slamRadius + player.r) {
         if (playerIsBlockingFrom(angleTo(player, boss))) blockHit(boss.x, boss.y, 520);
         else hurtPlayer(boss.x, boss.y, ATTACK_COLORS.slam);
       }
       boss.state = "recover";
-      boss.timer = 0.55;
+      boss.timer = 0.55 * bossStats.recoverMul;
       boss.attack = null;
     }
   }
 
-  function damageBoss(amount, x, y, color, { textColor, showText = true } = {}) {
+  // `hit: false` marks follow-up damage (burn ticks, a fire arrow's bonus) that
+  // shouldn't chip the shield on its own.
+  function damageBoss(amount, x, y, color, { textColor, showText = true, hit = true } = {}) {
     if (mode !== "playing" || boss.dead) return;
+    if (boss.shield > 0) {
+      if (hit) hitBossShield(x, y);
+      return;
+    }
     boss.hp = Math.max(0, boss.hp - amount);
     boss.flash = 0.07;
     burst(x, y, { count: 6 + Math.round(amount / 3), color, speed: 180, size: 2.5, life: 0.3 });
@@ -967,6 +1047,23 @@
       fireballs = [];
       beginEnding("victory");
     }
+  }
+
+  function hitBossShield(x, y) {
+    boss.shield -= 1;
+    boss.shieldFlash = 0.15;
+    burst(x, y, { count: 10, color: SHIELD_COLOR, speed: 200, size: 3, life: 0.3 });
+    if (boss.shield > 0) {
+      floatText(x, y - 10, "BLOCKED", SHIELD_COLOR);
+      return;
+    }
+    boss.state = "stunned";
+    boss.attack = null;
+    boss.stunT = boss.stunTotal = rand(bossStats.stunMin, bossStats.stunMax);
+    burst(boss.x, boss.y, { count: 50, color: SHIELD_COLOR, speed: 340, size: 4, life: 0.6 });
+    ring(boss.x, boss.y, 70, SHIELD_COLOR, 36);
+    floatText(boss.x, boss.y - 70, "STUNNED!", "#ffe08a");
+    shake = Math.max(shake, 10);
   }
 
   function updateBossDeath(dt) {
@@ -1018,7 +1115,10 @@
         damageBoss(a.damage, a.x, a.y, a.full ? "#ffd24a" : "#e8ffe0");
         if (a.fire) {
           const flame = ABILITIES.archer.flame;
-          damageBoss(Math.round(flame.hitDamage * damageMul()), a.x, a.y + 12, "#ff6a2a", { textColor: "#ff8a3d" });
+          damageBoss(Math.round(flame.hitDamage * damageMul()), a.x, a.y + 12, "#ff6a2a", {
+            textColor: "#ff8a3d",
+            hit: false,
+          });
           boss.burnT = flame.burnDuration;
         }
         if (a.full) shake = Math.max(shake, 4);
@@ -1037,7 +1137,10 @@
     boss.burnTick -= dt;
     if (boss.burnTick <= 0) {
       boss.burnTick = flame.burnTick;
-      damageBoss(flame.burnDamage, boss.x + rand(-12, 12), boss.y - 10, "#ff6a2a", { textColor: "#ff8a3d" });
+      damageBoss(flame.burnDamage, boss.x + rand(-12, 12), boss.y - 10, "#ff6a2a", {
+        textColor: "#ff8a3d",
+        hit: false,
+      });
     }
     if (Math.random() < 0.6) {
       particles.push({
@@ -1124,6 +1227,22 @@
     fireballs = fireballs.filter((f) => !f.dead);
   }
 
+  function updateShockwaves(dt) {
+    for (const w of shockwaves) {
+      w.r += SHOCKWAVE.speed * dt;
+      if (!w.hit && mode === "playing" && player.alive && Math.hypot(player.x - w.x, player.y - w.y) < w.r + player.r) {
+        w.hit = true;
+        player.dodgeT = 0;
+        player.blocking = false;
+        hurtPlayer(w.x, w.y, SHIELD_COLOR);
+        const a = Math.atan2(player.y - w.y, player.x - w.x);
+        player.kx = Math.cos(a) * SHOCKWAVE.knockback;
+        player.ky = Math.sin(a) * SHOCKWAVE.knockback;
+      }
+    }
+    shockwaves = shockwaves.filter((w) => w.r < SHOCKWAVE.maxRadius);
+  }
+
   function updateParticles(dt) {
     for (const p of particles) {
       p.x += p.vx * dt;
@@ -1151,6 +1270,7 @@
       updateRains(dt);
       updateBurn(dt);
       updateFireballs(dt);
+      updateShockwaves(dt);
 
       if (mode === "ending") {
         endTimer -= dt;
@@ -1616,6 +1736,7 @@
     if (boss.state === "windup" && boss.attack === "charge") return boss.aim;
     if (boss.state === "charge") return boss.chargeDir;
     if (boss.state === "recover") return Math.PI / 2 + facing * 0.5;
+    if (boss.state === "stunned") return Math.PI / 2 + facing * 0.15;
     return boss.aim + facing * 1.0;
   }
 
@@ -1755,6 +1876,112 @@
       ctx.fill();
       ctx.restore();
     }
+
+    if (boss.dead) return;
+    if (boss.shield > 0) drawBossShield(x, y, s);
+    if (boss.state === "stunned") drawStunStars(x, y - 31 * s, s);
+  }
+
+  function drawShockwaves() {
+    ctx.save();
+    if (!boss.dead && boss.state === "stunned" && boss.stunT < SHOCKWAVE.warnTime) {
+      const t = 1 - boss.stunT / SHOCKWAVE.warnTime;
+      const fy = boss.y + 16 * BOSS.scale;
+      ctx.strokeStyle = SHIELD_COLOR;
+      ctx.globalAlpha = 0.3 + 0.5 * Math.abs(Math.sin(boss.t * 18));
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.ellipse(boss.x, fy, 30 + t * 40, (30 + t * 40) * 0.45, 0, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.globalCompositeOperation = "lighter";
+    for (const w of shockwaves) {
+      const fade = 1 - w.r / SHOCKWAVE.maxRadius;
+      ctx.shadowColor = SHIELD_COLOR;
+      ctx.shadowBlur = 20;
+      ctx.strokeStyle = SHIELD_COLOR;
+      ctx.globalAlpha = 0.9 * fade;
+      ctx.lineWidth = 10 * fade + 2;
+      ctx.beginPath();
+      ctx.arc(w.x, w.y, w.r, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.strokeStyle = "#fff";
+      ctx.globalAlpha = 0.7 * fade;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(w.x, w.y, Math.max(0, w.r - 8), 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  function drawBossShield(x, y, s) {
+    const cy = y - 6 * s;
+    const pulse = 0.5 + Math.sin(boss.t * 4) * 0.5;
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    ctx.shadowColor = SHIELD_COLOR;
+    ctx.shadowBlur = 16;
+    ctx.fillStyle = SHIELD_COLOR;
+    ctx.globalAlpha = boss.shieldFlash > 0 ? 0.35 : 0.08 + pulse * 0.05;
+    ctx.beginPath();
+    ctx.ellipse(x, cy, 25 * s, 30 * s, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = boss.shieldFlash > 0 ? "#fff" : SHIELD_COLOR;
+    ctx.lineWidth = 2.5;
+    ctx.globalAlpha = 0.55 + pulse * 0.25;
+    ctx.stroke();
+    ctx.restore();
+
+    // One pip per remaining hit, floating above the head.
+    ctx.save();
+    const total = bossStats.shieldHits;
+    const gap = 16;
+    const startX = x - ((total - 1) * gap) / 2;
+    const py = y - 35 * s;
+    for (let i = 0; i < total; i++) {
+      const px = startX + i * gap;
+      ctx.beginPath();
+      ctx.moveTo(px, py - 6);
+      ctx.lineTo(px + 5, py - 3);
+      ctx.lineTo(px + 5, py + 2);
+      ctx.lineTo(px, py + 6);
+      ctx.lineTo(px - 5, py + 2);
+      ctx.lineTo(px - 5, py - 3);
+      ctx.closePath();
+      if (i < boss.shield) {
+        ctx.fillStyle = SHIELD_COLOR;
+        ctx.shadowColor = SHIELD_COLOR;
+        ctx.shadowBlur = 8;
+        ctx.fill();
+        ctx.shadowBlur = 0;
+      }
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.7)";
+      ctx.lineWidth = 1.2;
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  function drawStunStars(x, y, s) {
+    ctx.save();
+    ctx.fillStyle = "#ffe08a";
+    ctx.shadowColor = "#ffe08a";
+    ctx.shadowBlur = 8;
+    for (let i = 0; i < 3; i++) {
+      const a = boss.t * 4 + (i / 3) * Math.PI * 2;
+      const sx = x + Math.cos(a) * 12 * s;
+      const sy = y + Math.sin(a) * 3.5 * s;
+      ctx.beginPath();
+      for (let k = 0; k < 10; k++) {
+        const r = k % 2 ? 2.5 : 6;
+        const pa = -Math.PI / 2 + (k * Math.PI) / 5;
+        ctx.lineTo(sx + Math.cos(pa) * r, sy + Math.sin(pa) * r);
+      }
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.restore();
   }
 
   function drawTelegraphs() {
@@ -1793,17 +2020,17 @@
       ctx.fillStyle = color;
       ctx.globalAlpha = 0.1 + t * 0.15;
       ctx.beginPath();
-      ctx.arc(boss.x, fy, BOSS.slamRadius, 0, Math.PI * 2);
+      ctx.arc(boss.x, fy, bossStats.slamRadius, 0, Math.PI * 2);
       ctx.fill();
       ctx.globalAlpha = 0.3 + t * 0.3;
       ctx.beginPath();
-      ctx.arc(boss.x, fy, BOSS.slamRadius * t, 0, Math.PI * 2);
+      ctx.arc(boss.x, fy, bossStats.slamRadius * t, 0, Math.PI * 2);
       ctx.fill();
       ctx.strokeStyle = color;
       ctx.globalAlpha = 0.8;
       ctx.lineWidth = 2;
       ctx.beginPath();
-      ctx.arc(boss.x, fy, BOSS.slamRadius, 0, Math.PI * 2);
+      ctx.arc(boss.x, fy, bossStats.slamRadius, 0, Math.PI * 2);
       ctx.stroke();
     }
     ctx.restore();
@@ -1899,8 +2126,8 @@
     const barH = 20;
     const barX = (W - barW) / 2;
     const barY = 18;
-    const ratio = boss.hp / BOSS.maxHp;
-    const trail = boss.displayHp / BOSS.maxHp;
+    const ratio = boss.hp / bossStats.maxHp;
+    const trail = boss.displayHp / bossStats.maxHp;
 
     ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
     ctx.beginPath();
@@ -1923,10 +2150,21 @@
     ctx.shadowColor = "#000";
     ctx.shadowBlur = 4;
     ctx.textAlign = "left";
-    ctx.fillText(isEnraged() ? "FATFAT · ENRAGED" : "FATFAT", barX + 8, barY + barH / 2 + 1);
+    const labelParts = ["FATFAT"];
+    if (selectedDifficulty === "hard") labelParts.push("HARD");
+    if (boss.state === "stunned") labelParts.push("STUNNED");
+    else if (isEnraged()) labelParts.push("ENRAGED");
+    ctx.fillText(labelParts.join(" · "), barX + 8, barY + barH / 2 + 1);
     ctx.textAlign = "right";
-    ctx.fillText(`${Math.ceil(boss.hp)} / ${BOSS.maxHp}`, barX + barW - 8, barY + barH / 2 + 1);
+    ctx.fillText(`${Math.ceil(boss.hp)} / ${bossStats.maxHp}`, barX + barW - 8, barY + barH / 2 + 1);
     ctx.shadowBlur = 0;
+
+    if (boss.state === "stunned") {
+      ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
+      ctx.fillRect(barX, barY + barH + 4, barW, 5);
+      ctx.fillStyle = "#ffe08a";
+      ctx.fillRect(barX, barY + barH + 4, barW * (boss.stunT / boss.stunTotal), 5);
+    }
 
     // Player hearts.
     ctx.textAlign = "left";
@@ -2028,8 +2266,9 @@
     if (shake > 0) ctx.translate(rand(-shake, shake), rand(-shake, shake));
     drawArena(clock);
 
-    if (mode !== "start" && mode !== "abilities") {
+    if (mode !== "difficulty" && mode !== "classes" && mode !== "abilities") {
       drawTelegraphs();
+      drawShockwaves();
       drawRains();
       // Whoever stands lower on screen is closer to the camera, so draw them last.
       if (boss.y + 20 * BOSS.scale < player.y + 20 * PLAYER.scale) {
@@ -2045,7 +2284,7 @@
     drawParticles();
     ctx.restore();
 
-    if (mode !== "start" && mode !== "abilities") drawHud();
+    if (mode !== "difficulty" && mode !== "classes" && mode !== "abilities") drawHud();
     drawReticle();
   }
 

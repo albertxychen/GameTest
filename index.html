@@ -10,9 +10,37 @@
   <div id="game-wrapper">
     <canvas id="game" width="960" height="640"></canvas>
 
-    <div id="start-screen" class="overlay">
+    <div id="difficulty-screen" class="overlay">
       <h1>Boss Arena</h1>
-      <p class="tagline">Choose your class</p>
+      <p class="tagline">Choose your difficulty</p>
+      <div class="class-select">
+        <button class="class-card difficulty-card" type="button" data-difficulty="easy">
+          <span class="key">1</span>
+          <h2>Easy</h2>
+          <p>The classic fight. Learn Fatfat's moves and take him down.</p>
+          <ul>
+            <li>600 HP</li>
+            <li>Steady attack pace</li>
+            <li>Normal slam</li>
+          </ul>
+        </button>
+        <button class="class-card difficulty-card" type="button" data-difficulty="hard">
+          <span class="key">2</span>
+          <h2>Hard</h2>
+          <p>Fatfat spams attacks nonstop, but a 3-hit shield protects him. Break it to stun him.</p>
+          <ul>
+            <li>1000 HP</li>
+            <li>Nonstop attacks, huge slam</li>
+            <li>Shield break stuns him 3–5s</li>
+          </ul>
+        </button>
+      </div>
+      <p class="tip">Fatfat telegraphs every attack. Watch the red markings on the floor.</p>
+    </div>
+
+    <div id="class-screen" class="overlay hidden">
+      <h1>Boss Arena</h1>
+      <p class="tagline">Choose your class &nbsp;·&nbsp; <span id="class-difficulty" class="difficulty-tag">Easy</span></p>
       <div class="class-select">
         <button class="class-card" type="button" data-class="archer">
           <span class="key">1</span>
@@ -38,7 +66,9 @@
       <p class="controls">
         <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> / arrows move &nbsp;·&nbsp; mouse aims &nbsp;·&nbsp; <kbd>Space</kbd> dodge roll &nbsp;·&nbsp; <kbd>Q</kbd> ability
       </p>
-      <p class="tip">Fatfat telegraphs every attack. Watch the red markings on the floor.</p>
+      <div class="buttons">
+        <button id="class-back" class="secondary" type="button">Back</button>
+      </div>
     </div>
 
     <div id="ability-screen" class="overlay hidden">
