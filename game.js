@@ -111,15 +111,17 @@
       boots: {
         name: "Flying Boots",
         desc: "Enchanted boots: hold left click to spam arrows with no draw time.",
-        stats: ["Rapid fire, unlimited arrows", "+50% arrow damage, +30% speed", "Lasts 8s · Cooldown 16s"],
+        stats: ["Rapid fire, every 3rd arrow crits (x5)", "+50% arrow damage, +30% speed", "Lasts 8s · Cooldown 16s"],
         cooldown: 16,
         duration: 8,
         damageMul: 1.5,
         speedMul: 1.3,
-        rapidInterval: 0.2,
+        rapidInterval: 0.12,
         rapidDamage: 2,
         rapidSpeed: 1000,
         rapidSpread: 0.05,
+        critEvery: 3,
+        critMul: 5,
       },
     },
     warrior: {
@@ -141,13 +143,12 @@
         cooldown: 15,
         bonusHp: 2,
       },
-      lastDance: {
-        name: "Last Dance",
-        desc: "Passive. Triggers automatically when you drop to 1 heart.",
-        stats: ["+100% damage", "+50% movement speed", "No activation needed"],
-        passive: true,
-        damageMul: 2,
-        speedMul: 1.5,
+      dragonWarrior: {
+        name: "Dragon Warrior",
+        desc: "Press Q to summon a dragon that fights beside you and shields you from the boss.",
+        stats: ["2 dragons per fight · 200 HP each", "Fire breath, fireballs & rushes", "Dragons body-block boss attacks"],
+        cooldown: 1,
+        dragons: 2,
       },
     },
     wizard: {
@@ -276,11 +277,34 @@
     rageDamageTaken: 0.7,
     rageCooldownMul: 0.5,
     crystal: { count: 4, hp: 50, r: 16 },
-    rain: { fallTime: 0.4, slack: 0.45, minWarn: 1.0, inset: 16 },
+    rain: { fallTime: 0.4, slack: 0.2, minWarn: 0.6, inset: 16 },
     nova: { shots: 16, speed: 440, r: 8 },
     laser: { lockTime: 0.3, beamTime: 0.25, width: 26 },
     minion: { archer: 3, warrior: 4, wizard: 3, hp: 100, r: 14, scale: 0.75, speed: 150, spawnTime: 0.5 },
   };
+
+  // Dragon Warrior dragons.
+  const DRAGON = {
+    hp: 200,
+    r: 20,
+    scale: 1.4,
+    speed: 280,
+    spawnTime: 0.6,
+    guardDist: 70,
+    guardSpread: 48,
+    attackCd: [0.6, 1.0],
+    breath: { range: 150, halfArc: 0.5, approach: 95, maxApproach: 1.6, duration: 1.4, tick: 0.2, damage: 16 },
+    fireball: { shots: 3, spread: 0.12, speed: 580, r: 9, damage: 28 },
+    rush: { windup: 0.35, speed: 1000, overshoot: 90, damage: 80, knockback: 380 },
+    // Damage dragons take when they absorb boss attacks.
+    hurt: { fireball: 12, crystal: 6, charge: 30, slam: 25, laser: 20, shockwave: 20, minion: 5 },
+    minionHurtCd: 1,
+    colors: [
+      { body: "#c8322a", dark: "#7e1712", belly: "#f2a65a", wing: "#9c2219" },
+      { body: "#2f8f5a", dark: "#185235", belly: "#d8e88a", wing: "#21673f" },
+    ],
+  };
+  const DRAGON_FIRE = "#ff8a3d";
 
   const CRYSTAL_COLOR = "#c77dff";
 
@@ -413,6 +437,7 @@
 
   let player, boss, arrows, fireballs, shockwaves, rains, particles, texts;
   let crystals, minions, zoneRains, smites;
+  let dragons, dragonShots;
   let zeusBlast = null;
 
   function reset(cls, abilityId) {
@@ -429,9 +454,10 @@
       abilityCd: 0,
       flameShots: 0,
       bootsT: 0,
+      bootsShots: 0,
       callStacks: 0,
       infernalShield: false,
-      lastDance: false,
+      dragonsLeft: ability.dragons || 0,
       x: W / 2,
       y: ARENA.y + ARENA.h - 90,
       vx: 0,
@@ -518,6 +544,8 @@
     minions = [];
     zoneRains = [];
     smites = [];
+    dragons = [];
+    dragonShots = [];
     zeusBlast = null;
     rains = [];
     particles = [];
@@ -733,7 +761,6 @@
     let mul = 1;
     if (p.bootsT > 0) mul *= ABILITIES.archer.boots.damageMul;
     mul *= 1 + p.callStacks * ABILITIES.warrior.call.damage;
-    if (p.lastDance) mul *= ABILITIES.warrior.lastDance.damageMul;
     if (p.zeusT > 0) mul *= ABILITIES.wizard.zeus.damageMul;
     return mul;
   }
@@ -745,7 +772,6 @@
     const call = ABILITIES.warrior.call;
     let mul = Math.max(call.minMoveMul, 1 - p.callStacks * call.moveSpeed);
     if (p.bootsT > 0) mul *= ABILITIES.archer.boots.speedMul;
-    if (p.lastDance) mul *= ABILITIES.warrior.lastDance.speedMul;
     if (p.zeusT > 0) mul *= ABILITIES.wizard.zeus.speedMul;
     return mul;
   }
@@ -760,6 +786,7 @@
     if (a.passive || p.abilityCd > 0) return;
     if (p.abilityId === "infernal" && p.infernalShield) return;
     if (p.abilityId === "smite" && boss.dead) return;
+    if (p.abilityId === "dragonWarrior" && p.dragonsLeft <= 0) return;
     p.abilityCd = a.cooldown;
 
     if (p.abilityId === "rain") {
@@ -771,6 +798,7 @@
       burst(p.x, p.y - 8, { count: 20, color: "#ff8a3d", speed: 160, size: 3, life: 0.5 });
     } else if (p.abilityId === "boots") {
       p.bootsT = a.duration;
+      p.bootsShots = 0;
       burst(p.x, p.y + 18, { count: 20, color: "#9be7ff", speed: 180, size: 3, life: 0.5 });
     } else if (p.abilityId === "call") {
       p.callStacks += 1;
@@ -789,6 +817,8 @@
     } else if (p.abilityId === "field") {
       p.fieldT = a.duration;
       ring(p.x, p.y, a.radius, LIGHTNING_COLOR, 40);
+    } else if (p.abilityId === "dragonWarrior") {
+      summonDragon();
     }
   }
 
@@ -937,14 +967,6 @@
     abilityQueued = false;
     updateZeus(dt);
     if (canAct) updateField(dt);
-
-    if (p.abilityId === "lastDance" && !p.lastDance && p.hp === 1) {
-      p.lastDance = true;
-      ring(p.x, p.y, 90, "#ff3b5c", 48);
-      floatText(p.x, p.y - 44, "LAST DANCE!", "#ff3b5c");
-      shake = Math.max(shake, 10);
-    }
-
     if (p.infernalShield && Math.random() < 0.4) {
       const a = Math.random() * Math.PI * 2;
       particles.push({
@@ -1083,14 +1105,17 @@
     const angle = p.aim + rand(-boots.rapidSpread, boots.rapidSpread);
     const dx = Math.cos(angle);
     const dy = Math.sin(angle);
+    p.bootsShots += 1;
+    const crit = p.bootsShots % boots.critEvery === 0;
     arrows.push({
       x: p.x + dx * 18,
       y: p.y - 8 + dy * 18,
       vx: dx * boots.rapidSpeed,
       vy: dy * boots.rapidSpeed,
       angle,
-      damage: Math.round(boots.rapidDamage * damageMul()),
+      damage: Math.round(boots.rapidDamage * damageMul() * (crit ? boots.critMul : 1)),
       rapid: true,
+      crit,
     });
   }
 
@@ -1113,7 +1138,7 @@
       p.slashT -= dt;
       if (!canAct) return;
       const damage = Math.round(SWORD.damage * damageMul());
-      const color = p.lastDance ? "#ff3b5c" : "#e8f0ff";
+      const color = "#e8f0ff";
       if (!p.slashHit && !boss.dead && slashReaches(boss)) {
         p.slashHit = true;
         const hx = boss.x - Math.cos(p.slashAngle) * boss.r * 0.6;
@@ -1341,6 +1366,17 @@
         burst(boss.x, boss.y + 20 * BOSS.scale, { count: 2, color: "#a8957a", speed: 60, size: 4, life: 0.4 });
       }
 
+      const blocker = fighting && liveDragons().find((d) => dist(d, boss) < d.r + boss.r + 4);
+      if (blocker) {
+        hurtDragon(blocker, DRAGON.hurt.charge, ATTACK_COLORS.charge);
+        floatText(blocker.x, blocker.y - 60, "BLOCKED", DRAGON_FIRE);
+        blocker.vx += Math.cos(boss.chargeDir) * 400;
+        blocker.vy += Math.sin(boss.chargeDir) * 400;
+        shake = Math.max(shake, 10);
+        endCharge(1.0);
+        return;
+      }
+
       if (!boss.chargeHit && fighting && dist(player, boss) < player.r + boss.r + 4) {
         boss.chargeHit = true;
         if (playerIsBlockingFrom(angleTo(player, boss))) {
@@ -1441,6 +1477,11 @@
       ring(boss.x, feetY, bossStats.slamRadius, "#ff6a3d", 48);
       burst(boss.x, feetY, { count: 30, color: "#c9b89a", speed: 260, size: 4, life: 0.6 });
       shake = Math.max(shake, 14);
+      if (mode === "playing") {
+        for (const d of liveDragons()) {
+          if (dist(d, boss) < bossStats.slamRadius + d.r) hurtDragon(d, DRAGON.hurt.slam, ATTACK_COLORS.slam);
+        }
+      }
       if (mode === "playing" && player.alive && dist(player, boss) < bossStats.slamRadius + player.r) {
         if (playerIsBlockingFrom(angleTo(player, boss))) blockHit(boss.x, boss.y, 520);
         else hurtPlayer(boss.x, boss.y, ATTACK_COLORS.slam);
@@ -1606,6 +1647,17 @@
     for (let i = 0; i < 20; i++) {
       const d = rand(30, 900);
       burst(cp.x + Math.cos(a) * d, cp.y + Math.sin(a) * d, { count: 1, color: ATTACK_COLORS.laser, speed: 120, size: 3, life: 0.35 });
+    }
+    // A dragon standing in the beam ahead of the player takes the hit instead.
+    const along = (e) => (e.x - cp.x) * Math.cos(a) + (e.y - cp.y) * Math.sin(a);
+    const inBeam = (e) => distToRay(e, cp.x, cp.y, a) < TONI.laser.width / 2 + e.r;
+    const shield = mode === "playing" && liveDragons().filter(inBeam).sort((x, y) => along(x) - along(y))[0];
+    if (shield) {
+      hurtDragon(shield, DRAGON.hurt.laser, ATTACK_COLORS.laser);
+      if (along(shield) < along(player)) {
+        floatText(shield.x, shield.y - 60, "BLOCKED", DRAGON_FIRE);
+        return;
+      }
     }
     if (mode === "playing" && player.alive && distToRay(player, cp.x, cp.y, a) < TONI.laser.width / 2 + player.r) {
       if (playerIsBlockingFrom(angleTo(player, boss))) blockHit(cp.x, cp.y, 380);
@@ -1823,6 +1875,275 @@
   }
 
   // ---------------------------------------------------------------------------
+  // Dragon Warrior dragons
+  // ---------------------------------------------------------------------------
+
+  function summonDragon() {
+    const p = player;
+    p.dragonsLeft -= 1;
+    const index = ABILITIES.warrior.dragonWarrior.dragons - p.dragonsLeft - 1;
+    const side = dragons.some((d) => d.side === 1) ? -1 : 1;
+    const d = {
+      kind: "dragon",
+      x: p.x + side * 30,
+      y: p.y - 10,
+      vx: 0,
+      vy: 0,
+      r: DRAGON.r,
+      hp: DRAGON.hp,
+      maxHp: DRAGON.hp,
+      colors: DRAGON.colors[index % DRAGON.colors.length],
+      side,
+      state: "guard",
+      timer: 0,
+      attackCd: 0.4,
+      lastAttack: null,
+      aim: -Math.PI / 2,
+      flap: rand(0, 6),
+      flash: 0,
+      spawnT: DRAGON.spawnTime,
+      breathT: 0,
+      breathTick: 0,
+      rushLeft: 0,
+      rushHits: [],
+      hurtCd: 0,
+      chargeSerial: -1,
+      waveHits: new Set(),
+    };
+    dragons.push(d);
+    ring(d.x, d.y, 70, DRAGON_FIRE, 40);
+    burst(d.x, d.y, { count: 40, color: DRAGON_FIRE, speed: 300, size: 4, life: 0.6 });
+    burst(d.x, d.y, { count: 20, color: d.colors.body, speed: 200, size: 4, life: 0.6 });
+    floatText(d.x, d.y - 50, "DRAGON!", DRAGON_FIRE);
+    shake = Math.max(shake, 10);
+  }
+
+  // Crystals first (they make Toni immune), then minions near the player, then the boss.
+  function dragonTarget(d) {
+    const live = crystals.filter((c) => c.hp > 0);
+    if (live.length) return live.reduce((a, b) => (dist(a, d) < dist(b, d) ? a : b));
+    const threats = minions.filter((m) => m.hp > 0 && m.spawnT <= 0 && dist(m, player) < 260);
+    if (threats.length) return threats.reduce((a, b) => (dist(a, d) < dist(b, d) ? a : b));
+    return boss.dead ? null : boss;
+  }
+
+  // Dragon hits never chip Hard's shield; only the player can break it.
+  function dragonHit(t, amount, x, y) {
+    hitEnemy(t, amount, x, y, DRAGON_FIRE, { hit: false, textColor: "#ffb347" });
+  }
+
+  function hurtDragon(d, amount, color) {
+    if (d.hp <= 0 || d.spawnT > 0) return;
+    d.hp = Math.max(0, d.hp - amount);
+    d.flash = 0.1;
+    burst(d.x, d.y - 18, { count: 10, color, speed: 180, size: 3, life: 0.35 });
+    floatText(d.x, d.y - 46, amount, "#ff9a8a");
+    if (d.hp > 0) return;
+    burst(d.x, d.y - 18, { count: 60, color: d.colors.body, speed: 320, size: 4, life: 0.8 });
+    burst(d.x, d.y - 18, { count: 40, color: DRAGON_FIRE, speed: 260, size: 4, life: 0.7 });
+    floatText(d.x, d.y - 50, "DRAGON DOWN", "#ff6a5a");
+    shake = Math.max(shake, 10);
+    dragons = dragons.filter((o) => o !== d);
+  }
+
+  const liveDragons = () => dragons.filter((d) => d.hp > 0 && d.spawnT <= 0);
+
+  function dragonMouth(d) {
+    const dir = Math.cos(d.aim) >= 0 ? 1 : -1;
+    const s = DRAGON.scale;
+    return { x: d.x + dir * 34 * s, y: d.y + 14 - 22 - 17 * s };
+  }
+
+  function guardSpot(d) {
+    const p = player;
+    const a = boss.dead ? -Math.PI / 2 : angleTo(p, boss);
+    const px = -Math.sin(a) * d.side;
+    const py = Math.cos(a) * d.side;
+    return {
+      x: p.x + Math.cos(a) * DRAGON.guardDist + px * DRAGON.guardSpread,
+      y: p.y + Math.sin(a) * DRAGON.guardDist + py * DRAGON.guardSpread,
+    };
+  }
+
+  function steerDragon(d, tx, ty, speed, dt) {
+    const dx = tx - d.x;
+    const dy = ty - d.y;
+    const len = Math.hypot(dx, dy);
+    const want = len > 4 ? Math.min(speed, len * 6) : 0;
+    const k = Math.min(1, dt * 7);
+    d.vx += ((len ? (dx / len) * want : 0) - d.vx) * k;
+    d.vy += ((len ? (dy / len) * want : 0) - d.vy) * k;
+  }
+
+  function startDragonAttack(d, t) {
+    const options = ["breath", "fireball", "rush"].filter((a) => a !== d.lastAttack);
+    const type = options[Math.floor(Math.random() * options.length)];
+    d.lastAttack = type;
+    d.aim = angleTo(d, t);
+    if (type === "fireball") {
+      const f = DRAGON.fireball;
+      const m = dragonMouth(d);
+      const base = Math.atan2(t.y - m.y, t.x - m.x);
+      for (let i = 0; i < f.shots; i++) {
+        const a = base + (i - (f.shots - 1) / 2) * f.spread;
+        dragonShots.push({ x: m.x, y: m.y, vx: Math.cos(a) * f.speed, vy: Math.sin(a) * f.speed, r: f.r, damage: f.damage });
+      }
+      burst(m.x, m.y, { count: 14, color: DRAGON_FIRE, speed: 200, size: 3, life: 0.3 });
+      d.attackCd = rand(...DRAGON.attackCd);
+    } else if (type === "breath") {
+      d.state = "breath";
+      d.timer = DRAGON.breath.maxApproach;
+      d.breathT = 0;
+      d.breathTick = 0;
+    } else {
+      d.state = "windup";
+      d.timer = DRAGON.rush.windup;
+    }
+  }
+
+  function updateDragons(dt) {
+    const fighting = mode === "playing";
+    for (const d of [...dragons]) {
+      d.flap += dt * (d.state === "rush" ? 22 : 11);
+      d.flash = Math.max(0, d.flash - dt);
+      d.hurtCd = Math.max(0, d.hurtCd - dt);
+      if (d.spawnT > 0) {
+        d.spawnT -= dt;
+        continue;
+      }
+      const t = fighting ? dragonTarget(d) : null;
+
+      if (!t && d.state !== "rush") d.state = "guard";
+
+      if (d.state === "guard") {
+        const g = guardSpot(d);
+        steerDragon(d, g.x, g.y, DRAGON.speed, dt);
+        if (t) {
+          d.aim = angleTo(d, t);
+          d.attackCd -= dt;
+          if (d.attackCd <= 0) startDragonAttack(d, t);
+        } else {
+          d.aim = Math.cos(d.aim) >= 0 ? 0 : Math.PI;
+        }
+      } else if (d.state === "breath") {
+        const b = DRAGON.breath;
+        const a = angleTo(t, d);
+        const reach = d.breathT > 0 || dist(d, t) - t.r < b.approach + 15;
+        if (!reach) {
+          d.timer -= dt;
+          steerDragon(d, t.x + Math.cos(a) * (t.r + b.approach * 0.8), t.y + Math.sin(a) * (t.r + b.approach * 0.8), DRAGON.speed * 1.4, dt);
+          if (d.timer <= 0) d.breathT = 0.001;
+        } else {
+          steerDragon(d, t.x + Math.cos(a) * (t.r + b.approach * 0.8), t.y + Math.sin(a) * (t.r + b.approach * 0.8), DRAGON.speed * 0.6, dt);
+          d.aim = angleTo(d, t);
+          d.breathT += dt;
+          d.breathTick -= dt;
+          const m = dragonMouth(d);
+          for (let i = 0; i < 3; i++) {
+            const sa = d.aim + rand(-b.halfArc, b.halfArc) * 0.8;
+            const sp = rand(260, 420);
+            particles.push({ x: m.x, y: m.y, vx: Math.cos(sa) * sp, vy: Math.sin(sa) * sp, life: 0.35, maxLife: 0.35, size: rand(4, 7),
+              color: Math.random() < 0.5 ? "#ff6a2a" : Math.random() < 0.5 ? "#ffd24a" : "#ff3b1f" });
+          }
+          if (d.breathTick <= 0) {
+            d.breathTick = b.tick;
+            for (const e of enemies()) {
+              const inRange = dist(d, e) - e.r < b.range;
+              const allowance = Math.asin(Math.min(1, e.r / Math.max(dist(d, e), 1)));
+              if (inRange && angleDiff(angleTo(d, e), d.aim) <= b.halfArc + allowance) {
+                dragonHit(e, b.damage, e.x + rand(-8, 8), e.y - 14);
+              }
+            }
+          }
+          if (d.breathT >= b.duration) {
+            d.state = "guard";
+            d.attackCd = rand(...DRAGON.attackCd);
+          }
+        }
+      } else if (d.state === "windup") {
+        d.timer -= dt;
+        d.aim = angleTo(d, t);
+        d.vx += (-Math.cos(d.aim) * 120 - d.vx) * Math.min(1, dt * 8);
+        d.vy += (-Math.sin(d.aim) * 120 - d.vy) * Math.min(1, dt * 8);
+        if (d.timer <= 0) {
+          d.state = "rush";
+          d.rushLeft = dist(d, t) + DRAGON.rush.overshoot;
+          d.rushHits = [];
+          d.vx = Math.cos(d.aim) * DRAGON.rush.speed;
+          d.vy = Math.sin(d.aim) * DRAGON.rush.speed;
+          burst(d.x, d.y - 18, { count: 16, color: DRAGON_FIRE, speed: 160, size: 3, life: 0.3 });
+        }
+      } else if (d.state === "rush") {
+        const r = DRAGON.rush;
+        d.rushLeft -= r.speed * dt;
+        particles.push({ x: d.x, y: d.y - 18, vx: rand(-30, 30), vy: rand(-30, 30), life: 0.3, maxLife: 0.3, size: 5, color: d.colors.body });
+        for (const e of enemies()) {
+          if (d.rushHits.includes(e) || dist(d, e) > d.r + e.r + 6) continue;
+          d.rushHits.push(e);
+          dragonHit(e, r.damage, e.x, e.y - 20);
+          if (e.kind === "minion" || e === boss) {
+            const k = e === boss ? r.knockback * 0.6 : r.knockback;
+            e.kx += Math.cos(d.aim) * k;
+            e.ky += Math.sin(d.aim) * k;
+          }
+          burst(e.x, e.y, { count: 24, color: DRAGON_FIRE, speed: 260, size: 4, life: 0.45 });
+          shake = Math.max(shake, 7);
+        }
+        if (d.rushLeft <= 0) {
+          d.state = "guard";
+          d.attackCd = rand(...DRAGON.attackCd);
+        }
+      }
+
+      d.x += d.vx * dt;
+      d.y += d.vy * dt;
+      if (clampToArena(d, 1) && d.state === "rush") {
+        d.state = "guard";
+        d.attackCd = rand(...DRAGON.attackCd);
+      }
+      for (const o of dragons) {
+        if (o === d) continue;
+        const dd = dist(d, o);
+        if (dd < d.r * 2 && dd > 0.01) {
+          d.x += ((d.x - o.x) / dd) * 60 * dt;
+          d.y += ((d.y - o.y) / dd) * 60 * dt;
+        }
+      }
+
+      for (const e of minions) {
+        if (e.hp <= 0 || e.spawnT > 0 || dist(d, e) > d.r + e.r) continue;
+        const away = angleTo(d, e);
+        e.kx = Math.cos(away) * 420;
+        e.ky = Math.sin(away) * 420;
+        if (d.hurtCd <= 0) {
+          d.hurtCd = DRAGON.minionHurtCd;
+          hurtDragon(d, DRAGON.hurt.minion, ATTACK_COLORS.minions);
+        }
+      }
+    }
+  }
+
+  function updateDragonShots(dt) {
+    for (const s of dragonShots) {
+      s.x += s.vx * dt;
+      s.y += s.vy * dt;
+      if (Math.random() < 0.7) {
+        particles.push({ x: s.x, y: s.y, vx: rand(-25, 25), vy: rand(-25, 25), life: 0.25, maxLife: 0.25, size: s.r * 0.8,
+          color: Math.random() < 0.5 ? "#ff6a2a" : "#ffd24a" });
+      }
+      const hit = mode === "playing" && enemies().find((e) => Math.hypot(s.x - e.x, s.y - e.y) < e.r + s.r);
+      if (hit) {
+        s.dead = true;
+        dragonHit(hit, s.damage, s.x, s.y);
+        burst(s.x, s.y, { count: 12, color: DRAGON_FIRE, speed: 180, size: 3, life: 0.3 });
+      } else if (!insideArena(s.x, s.y)) {
+        s.dead = true;
+      }
+    }
+    dragonShots = dragonShots.filter((s) => !s.dead);
+  }
+
+  // ---------------------------------------------------------------------------
   // Projectiles, particles
   // ---------------------------------------------------------------------------
 
@@ -1843,12 +2164,15 @@
         });
       }
       const add = mode === "playing" && [...crystals, ...minions].find((t) => t.hp > 0 && Math.hypot(a.x - t.x, a.y - t.y) < t.r + 4);
+      const hitColor = a.crit ? "#ff5ac8" : a.full ? "#ffd24a" : "#e8ffe0";
       if (add) {
         a.dead = true;
-        damageAdd(add, a.damage + (a.fire ? ABILITIES.archer.flame.hitDamage : 0), a.x, a.y, a.full ? "#ffd24a" : "#e8ffe0");
+        damageAdd(add, a.damage + (a.fire ? ABILITIES.archer.flame.hitDamage : 0), a.x, a.y, hitColor);
+        if (a.crit) critPop(a.x, a.y);
       } else if (!boss.dead && Math.hypot(a.x - boss.x, a.y - boss.y) < boss.r) {
         a.dead = true;
-        damageBoss(a.damage, a.x, a.y, a.full ? "#ffd24a" : "#e8ffe0");
+        damageBoss(a.damage, a.x, a.y, hitColor, a.crit ? { textColor: "#ff5ac8" } : {});
+        if (a.crit) critPop(a.x, a.y);
         if (a.fire) {
           const flame = ABILITIES.archer.flame;
           damageBoss(Math.round(flame.hitDamage * damageMul()), a.x, a.y + 12, "#ff6a2a", {
@@ -1864,6 +2188,12 @@
       }
     }
     arrows = arrows.filter((a) => !a.dead);
+  }
+
+  function critPop(x, y) {
+    burst(x, y, { count: 16, color: "#ff5ac8", speed: 260, size: 3, life: 0.35 });
+    floatText(x + rand(-10, 10), y - 30, "CRIT!", "#ff5ac8");
+    shake = Math.max(shake, 3);
   }
 
   function updateBurn(dt) {
@@ -1947,6 +2277,12 @@
         });
       }
 
+      const blocker = mode === "playing" && liveDragons().find((d) => Math.hypot(f.x - d.x, f.y - d.y) < f.r + d.r);
+      if (blocker) {
+        f.dead = true;
+        hurtDragon(blocker, f.crystal ? DRAGON.hurt.crystal : DRAGON.hurt.fireball, f.color);
+        continue;
+      }
       if (mode === "playing" && player.alive && Math.hypot(f.x - player.x, f.y - player.y) < f.r + player.r * 0.7) {
         if (playerIsBlockingFrom(Math.atan2(f.y - player.y, f.x - player.x))) {
           f.dead = true;
@@ -1966,6 +2302,12 @@
   function updateShockwaves(dt) {
     for (const w of shockwaves) {
       w.r += SHOCKWAVE.speed * dt;
+      w.dragonsHit ??= new Set();
+      for (const d of liveDragons()) {
+        if (w.dragonsHit.has(d) || Math.hypot(d.x - w.x, d.y - w.y) > w.r + d.r) continue;
+        w.dragonsHit.add(d);
+        hurtDragon(d, DRAGON.hurt.shockwave, SHIELD_COLOR);
+      }
       if (!w.hit && mode === "playing" && player.alive && Math.hypot(player.x - w.x, player.y - w.y) < w.r + player.r) {
         w.hit = true;
         player.dodgeT = 0;
@@ -2009,6 +2351,8 @@
       updateShockwaves(dt);
       updateCrystals(dt);
       updateMinions(dt);
+      updateDragons(dt);
+      updateDragonShots(dt);
       updateZoneRains(dt);
       for (const s of smites) s.t -= dt;
       smites = smites.filter((s) => s.t > 0);
@@ -2670,7 +3014,6 @@
     const pulse = 1 + Math.sin(clock * 8) * 0.08;
     const auras = [];
     if (p.infernalShield) auras.push({ color: "255, 106, 42", radius: 26 });
-    if (p.lastDance) auras.push({ color: "255, 59, 92", radius: 30 });
     if (p.bootsT > 0) auras.push({ color: "155, 231, 255", radius: 22 });
     if (p.zeusT > 0) auras.push({ color: "255, 225, 74", radius: 34 });
     if (p.respawnT > 0) {
@@ -2986,6 +3329,147 @@
     }
   }
 
+  function drawDragonShadows() {
+    for (const d of dragons) {
+      const rise = d.spawnT > 0 ? 1 - d.spawnT / DRAGON.spawnTime : 1;
+      ctx.save();
+      ctx.globalAlpha = 0.4 + 0.6 * rise;
+      drawShadow(d.x, d.y, 1, 16 * DRAGON.scale);
+      ctx.restore();
+    }
+  }
+
+  // Side-on dragon hovering above its shadow; (x, y) is the ground point.
+  function drawDragon(d) {
+    const rise = d.spawnT > 0 ? 1 - d.spawnT / DRAGON.spawnTime : 1;
+    const c = d.colors;
+    const dir = Math.cos(d.aim) >= 0 ? 1 : -1;
+    const flap = Math.sin(d.flap);
+    const hover = 22 * rise + Math.sin(d.flap * 0.35) * 3;
+    const lit = d.flash > 0;
+
+    ctx.save();
+    ctx.globalAlpha = 0.3 + 0.7 * rise;
+    ctx.translate(d.x, d.y + 14 - hover);
+    if (d.state === "rush") ctx.rotate(Math.atan2(Math.sin(d.aim), Math.abs(Math.cos(d.aim))) * dir * 0.6);
+    ctx.scale(dir * DRAGON.scale, DRAGON.scale);
+
+    const wing = (offset, color) => {
+      ctx.fillStyle = lit ? "#fff" : color;
+      ctx.beginPath();
+      ctx.moveTo(-6 + offset, -8);
+      ctx.quadraticCurveTo(-18 + offset, -24 - flap * 18, -30 + offset, -30 - flap * 22);
+      ctx.lineTo(-18 + offset, -18 - flap * 10);
+      ctx.lineTo(-10 + offset, -20 - flap * 12);
+      ctx.lineTo(6 + offset, -10);
+      ctx.closePath();
+      ctx.fill();
+    };
+    wing(8, c.dark);
+
+    ctx.strokeStyle = lit ? "#fff" : c.body;
+    ctx.lineCap = "round";
+    ctx.lineWidth = 7;
+    ctx.beginPath();
+    ctx.moveTo(-12, -2);
+    ctx.quadraticCurveTo(-26, 6 + Math.sin(d.flap * 0.5) * 4, -38, -2 + Math.sin(d.flap * 0.5) * 6);
+    ctx.stroke();
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(-36, -2 + Math.sin(d.flap * 0.5) * 6);
+    ctx.lineTo(-44, -6 + Math.sin(d.flap * 0.5) * 7);
+    ctx.stroke();
+
+    ctx.fillStyle = lit ? "#fff" : c.body;
+    ctx.beginPath();
+    ctx.ellipse(0, -4, 17, 10, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = c.belly;
+    ctx.beginPath();
+    ctx.ellipse(2, 0, 12, 5, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.strokeStyle = lit ? "#fff" : c.body;
+    ctx.lineWidth = 8;
+    ctx.beginPath();
+    ctx.moveTo(10, -8);
+    ctx.quadraticCurveTo(16, -18, 20, -18);
+    ctx.stroke();
+    ctx.fillStyle = lit ? "#fff" : c.body;
+    ctx.beginPath();
+    ctx.ellipse(23, -19, 9, 6.5, 0.1, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(30, -17, 5, 3.5, 0.15, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = c.belly;
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.moveTo(19, -24);
+    ctx.lineTo(13, -31);
+    ctx.moveTo(23, -25);
+    ctx.lineTo(19, -33);
+    ctx.stroke();
+    ctx.fillStyle = "#ffe14a";
+    ctx.beginPath();
+    ctx.arc(25, -21, 1.8, 0, Math.PI * 2);
+    ctx.fill();
+
+    wing(0, c.wing);
+
+    if (d.state === "breath" && d.breathT > 0) {
+      ctx.globalCompositeOperation = "lighter";
+      const g = ctx.createRadialGradient(34, -17, 0, 34, -17, 14);
+      g.addColorStop(0, "rgba(255, 230, 120, 0.9)");
+      g.addColorStop(1, "rgba(255, 106, 42, 0)");
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(34, -17, 14, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+
+    if (d.spawnT <= 0) drawMiniBar(d.x, d.y + 14 - hover - 36 * DRAGON.scale, 36, d.hp / d.maxHp, "#ff8a3d");
+  }
+
+  function drawDragonBreath() {
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    for (const d of dragons) {
+      if (d.state !== "breath" || d.breathT <= 0) continue;
+      const b = DRAGON.breath;
+      const m = dragonMouth(d);
+      const flicker = 0.85 + Math.random() * 0.15;
+      const g = ctx.createRadialGradient(m.x, m.y, 4, m.x, m.y, b.range * flicker);
+      g.addColorStop(0, "rgba(255, 240, 160, 0.55)");
+      g.addColorStop(0.5, "rgba(255, 120, 40, 0.35)");
+      g.addColorStop(1, "rgba(255, 60, 20, 0)");
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.moveTo(m.x, m.y);
+      ctx.arc(m.x, m.y, b.range * flicker, d.aim - b.halfArc, d.aim + b.halfArc);
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  function drawDragonShots() {
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    for (const s of dragonShots) {
+      const g = ctx.createRadialGradient(s.x, s.y, 0, s.x, s.y, s.r * 2);
+      g.addColorStop(0, "rgba(255, 245, 190, 1)");
+      g.addColorStop(0.4, "rgba(255, 140, 50, 0.9)");
+      g.addColorStop(1, "rgba(255, 60, 20, 0)");
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, s.r * 2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
   function drawMiniBar(x, y, w, frac, color) {
     ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
     ctx.fillRect(x - w / 2 - 1, y - 1, w + 2, 6);
@@ -3273,11 +3757,11 @@
       const dy = Math.sin(a.angle);
       ctx.save();
       if (a.full || a.fire || a.rapid) {
-        ctx.shadowColor = a.fire ? "#ff6a2a" : a.rapid ? "#9be7ff" : "#ffd24a";
-        ctx.shadowBlur = 12;
+        ctx.shadowColor = a.fire ? "#ff6a2a" : a.crit ? "#ff5ac8" : a.rapid ? "#9be7ff" : "#ffd24a";
+        ctx.shadowBlur = a.crit ? 18 : 12;
       }
-      ctx.strokeStyle = a.fire ? "#ff8a3d" : a.rapid ? "#9be7ff" : a.full ? "#ffd24a" : "#c8a878";
-      ctx.lineWidth = 2;
+      ctx.strokeStyle = a.fire ? "#ff8a3d" : a.crit ? "#ff5ac8" : a.rapid ? "#9be7ff" : a.full ? "#ffd24a" : "#c8a878";
+      ctx.lineWidth = a.crit ? 3 : 2;
       line(a.x - dx * 22, a.y - dy * 22, a.x, a.y);
       ctx.fillStyle = "#e0e6ee";
       ctx.beginPath();
@@ -3460,8 +3944,9 @@
         return `x${p.callStacks} STACKS · ${cdText}`;
       case "infernal":
         return p.infernalShield ? (p.abilityCd > 0 ? `SHIELD UP · ${cdText}` : "SHIELD UP") : cdText;
-      case "lastDance":
-        return p.lastDance ? "ACTIVE!" : "PASSIVE · AT 1 HEART";
+      case "dragonWarrior":
+        if (p.dragonsLeft > 0) return `${p.dragonsLeft} LEFT · ${cdText}`;
+        return dragons.length ? `${dragons.length} FIGHTING` : "NO DRAGONS LEFT";
       case "field":
         return p.fieldT > 0 ? `ACTIVE ${p.fieldT.toFixed(1)}s` : cdText;
       case "zeus":
@@ -3478,10 +3963,11 @@
     const x = 686;
     const w = 124;
     const active =
-      p.bootsT > 0 || p.infernalShield || p.flameShots > 0 || p.lastDance || p.fieldT > 0 || p.zeusT > 0 || p.respawnT > 0;
-    let frac = a.passive ? (p.lastDance ? 1 : 0) : p.abilityCd > 0 ? 1 - p.abilityCd / a.cooldown : 1;
+      p.bootsT > 0 || p.infernalShield || p.flameShots > 0 || dragons.length > 0 || p.fieldT > 0 || p.zeusT > 0 || p.respawnT > 0;
+    let frac = a.passive ? 0 : p.abilityCd > 0 ? 1 - p.abilityCd / a.cooldown : 1;
     if (p.abilityId === "zeus") frac = p.zeusT > 0 || p.respawnT > 0 ? 1 : 0;
-    const ready = !a.passive && p.abilityCd <= 0;
+    if (p.abilityId === "dragonWarrior" && p.dragonsLeft <= 0) frac = 0;
+    const ready = !a.passive && p.abilityCd <= 0 && !(p.abilityId === "dragonWarrior" && p.dragonsLeft <= 0);
     const color = active ? "#ff8a3d" : ready ? "#8fe3ff" : "#5a7a8a";
 
     ctx.textAlign = "left";
@@ -3527,6 +4013,7 @@
       drawCrystalTethers();
       drawCrystals();
       drawMinions();
+      drawDragonShadows();
       // Whoever stands lower on screen is closer to the camera, so draw them last.
       if (boss.y + 20 * BOSS.scale < player.y + 20 * PLAYER.scale) {
         drawBossFigure();
@@ -3535,12 +4022,15 @@
         drawPlayer();
         drawBossFigure();
       }
+      drawDragonBreath();
+      for (const d of [...dragons].sort((a, b) => a.y - b.y)) drawDragon(d);
       drawLaser();
       drawWizardLightning();
       drawSmites();
       drawZeusBlast();
       drawArrows();
       drawFireballs();
+      drawDragonShots();
     }
     drawParticles();
     ctx.restore();
