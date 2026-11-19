@@ -41,6 +41,12 @@
       speed: 225,
       colors: { skin: "#e8b98f", tunic: "#3b5fa8", pants: "#3a3a48", boots: "#2a2a30", accent: "#c9a13a" },
     },
+    wizard: {
+      name: "Wizard",
+      maxHp: 4,
+      speed: 235,
+      colors: { skin: "#f0c8a4", tunic: "#5b3fa8", pants: "#3a2a6a", boots: "#2a1f40", accent: "#d9b84a" },
+    },
   };
 
   const PLAYER = { r: 13, scale: 1, accel: 14, invulnTime: 1.0, knockback: 420 };
@@ -57,6 +63,24 @@
   };
   const SWORD = { duration: 0.2, cooldown: 0.4, range: 82, arc: 2.1, damage: 13, lunge: 170 };
   const SHIELD = { halfArc: 1.3, moveMul: 0.5 };
+  // Wizard's lightning: hold left click with an enemy in range. Damage per second
+  // ramps from minDps to maxDps over rampTime and resets whenever the beam breaks.
+  const STAFF = {
+    range: 280,
+    breakRange: 310,
+    tick: 0.25,
+    minDps: 10,
+    maxDps: 40,
+    rampTime: 4,
+    chainRange: 170,
+    chainCount: 2,
+    chainMul: 0.4,
+    moveMul: 0.5,
+    // How often a held beam can chip Hard's boss shield.
+    shieldHitInterval: 0.75,
+  };
+  const LIGHTNING_COLOR = "#9be7ff";
+  const ZEUS_COLOR = "#ffe14a";
 
   // One ability is picked per run. Active abilities are used with Q.
   const ABILITIES = {
@@ -123,6 +147,40 @@
         passive: true,
         damageMul: 2,
         speedMul: 1.5,
+      },
+    },
+    wizard: {
+      smite: {
+        name: "Smite Cannon",
+        desc: "Call a bolt from the sky onto the boss. No aiming needed.",
+        stats: ["80 damage, ignores shields", "Stuns the boss for 4s", "Cooldown 20s"],
+        cooldown: 20,
+        damage: 80,
+        stun: 4,
+      },
+      field: {
+        name: "Electric Field",
+        desc: "Surround yourself with electricity that zaps anything that gets close.",
+        stats: ["Zaps: 6 damage + 0.5s stun", "Lasts 12s", "Cooldown 30s"],
+        cooldown: 30,
+        duration: 12,
+        radius: 120,
+        damage: 6,
+        stun: 0.5,
+        zapInterval: 0.75,
+      },
+      zeus: {
+        name: "Zeus",
+        desc: "Become the god of lightning for 30s. It costs you dearly afterwards.",
+        stats: ["Invincible, +200% damage & speed", "Lasts 30s · one use", "After: -3 hearts, weaker staff"],
+        oneUse: true,
+        duration: 30,
+        damageMul: 3,
+        speedMul: 3,
+        hpCost: 3,
+        afterDamageMul: 0.7,
+        afterSpeedMul: 0.8,
+        afterRangeMul: 0.75,
       },
     },
   };
@@ -217,7 +275,7 @@
     rain: { fallTime: 0.4, slack: 0.45, minWarn: 1.0, inset: 16 },
     nova: { shots: 16, speed: 440, r: 8 },
     laser: { lockTime: 0.3, beamTime: 0.25, width: 26 },
-    minion: { archer: 3, warrior: 4, hp: 100, r: 14, scale: 0.75, speed: 150, spawnTime: 0.5 },
+    minion: { archer: 3, warrior: 4, wizard: 3, hp: 100, r: 14, scale: 0.75, speed: 150, spawnTime: 0.5 },
   };
 
   const CRYSTAL_COLOR = "#c77dff";
@@ -286,6 +344,7 @@
     } else if (mode === "classes") {
       if (e.code === "Digit1") showAbilities("archer");
       if (e.code === "Digit2") showAbilities("warrior");
+      if (e.code === "Digit3") showAbilities("wizard");
       if (e.code === "Escape" || e.code === "Backspace") showDifficulty();
     } else if (mode === "abilities") {
       const ids = Object.keys(ABILITIES[selectedClass]);
@@ -349,7 +408,7 @@
   let shake = 0;
 
   let player, boss, arrows, fireballs, shockwaves, rains, particles, texts;
-  let crystals, minions, zoneRains;
+  let crystals, minions, zoneRains, smites;
 
   function reset(cls, abilityId) {
     bossStats = { ...BOSS, ...DIFFICULTIES[selectedDifficulty].boss };
@@ -395,6 +454,15 @@
       slashHit: false,
       slashId: 0,
       blocking: false,
+      beamTarget: null,
+      beamT: 0,
+      beamTick: 0,
+      beamShieldCd: 0,
+      beamChains: [],
+      fieldT: 0,
+      zeusT: 0,
+      abilityUsed: false,
+      zeusSpent: false,
     };
     boss = {
       x: W / 2,
@@ -428,6 +496,9 @@
       shieldFlash: 0,
       stunT: 0,
       stunTotal: 0,
+      stunKind: null,
+      zapT: 0,
+      zapCd: 0,
       cds: { ...TONI.startCooldowns },
       raged: false,
       laserAngle: 0,
@@ -441,6 +512,7 @@
     crystals = [];
     minions = [];
     zoneRains = [];
+    smites = [];
     rains = [];
     particles = [];
     texts = [];
@@ -634,8 +706,12 @@
     if (p.bootsT > 0) mul *= ABILITIES.archer.boots.damageMul;
     mul *= 1 + p.callStacks * ABILITIES.warrior.call.damage;
     if (p.lastDance) mul *= ABILITIES.warrior.lastDance.damageMul;
+    if (p.zeusT > 0) mul *= ABILITIES.wizard.zeus.damageMul;
+    if (p.zeusSpent) mul *= ABILITIES.wizard.zeus.afterDamageMul;
     return mul;
   }
+
+  const staffRange = () => STAFF.range * (player.zeusSpent ? ABILITIES.wizard.zeus.afterRangeMul : 1);
 
   function moveMul() {
     const p = player;
@@ -643,6 +719,8 @@
     let mul = Math.max(call.minMoveMul, 1 - p.callStacks * call.moveSpeed);
     if (p.bootsT > 0) mul *= ABILITIES.archer.boots.speedMul;
     if (p.lastDance) mul *= ABILITIES.warrior.lastDance.speedMul;
+    if (p.zeusT > 0) mul *= ABILITIES.wizard.zeus.speedMul;
+    if (p.zeusSpent) mul *= ABILITIES.wizard.zeus.afterSpeedMul;
     return mul;
   }
 
@@ -654,8 +732,11 @@
     const p = player;
     const a = p.ability;
     if (a.passive || p.abilityCd > 0) return;
+    if (a.oneUse && p.abilityUsed) return;
     if (p.abilityId === "infernal" && p.infernalShield) return;
-    p.abilityCd = a.cooldown;
+    if (p.abilityId === "smite" && boss.dead) return;
+    p.abilityCd = a.cooldown || 0;
+    p.abilityUsed = true;
 
     if (p.abilityId === "rain") {
       const x = clamp(mouse.x, ARENA.x, ARENA.x + ARENA.w);
@@ -675,7 +756,71 @@
     } else if (p.abilityId === "infernal") {
       p.infernalShield = true;
       ring(p.x, p.y, 60, "#ff6a2a", 36);
+    } else if (p.abilityId === "smite") {
+      smites.push({ x: boss.x, y: boss.y, t: 0.6 });
+      damageBoss(Math.round(a.damage * damageMul()), boss.x, boss.y - 20, ZEUS_COLOR, { bypass: true, textColor: ZEUS_COLOR });
+      stunBoss(a.stun, "smite");
+      burst(boss.x, boss.y, { count: 50, color: ZEUS_COLOR, speed: 320, size: 4, life: 0.6 });
+      shake = Math.max(shake, 14);
+    } else if (p.abilityId === "field") {
+      p.fieldT = a.duration;
+      ring(p.x, p.y, a.radius, LIGHTNING_COLOR, 40);
+    } else if (p.abilityId === "zeus") {
+      p.zeusT = a.duration;
+      ring(p.x, p.y, 90, ZEUS_COLOR, 48);
+      floatText(p.x, p.y - 44, "ZEUS!", ZEUS_COLOR);
+      shake = Math.max(shake, 10);
     }
+  }
+
+  function updateZeus(dt) {
+    const p = player;
+    if (p.zeusT <= 0) return;
+    p.zeusT -= dt;
+    if (Math.random() < 0.5) {
+      const a = Math.random() * Math.PI * 2;
+      particles.push({ x: p.x + Math.cos(a) * 22, y: p.y + Math.sin(a) * 26, vx: 0, vy: -50, life: 0.3, maxLife: 0.3, size: 3, color: ZEUS_COLOR });
+    }
+    if (p.zeusT > 0) return;
+    const z = ABILITIES.wizard.zeus;
+    p.zeusT = 0;
+    p.zeusSpent = true;
+    p.hp = Math.max(1, p.hp - z.hpCost);
+    ring(p.x, p.y, 70, "#8a7a50", 30);
+    floatText(p.x, p.y - 44, `-${z.hpCost} HEARTS`, "#ff4d6d");
+    shake = Math.max(shake, 10);
+  }
+
+  // Zaps every enemy inside the field; each enemy can only be zapped every zapInterval.
+  function updateField(dt) {
+    const p = player;
+    if (p.fieldT <= 0) return;
+    p.fieldT = Math.max(0, p.fieldT - dt);
+    const f = ABILITIES.wizard.field;
+    const damage = Math.max(1, Math.round(f.damage * damageMul()));
+    for (const t of enemies()) {
+      if (dist(p, t) - t.r > f.radius || t.zapCd > 0) continue;
+      t.zapCd = f.zapInterval;
+      if (t.kind !== "crystal") t.zapT = f.stun;
+      hitEnemy(t, damage, t.x, t.y - 10, LIGHTNING_COLOR, { hit: false });
+      burst(t.x, t.y, { count: 8, color: LIGHTNING_COLOR, speed: 160, size: 2.5, life: 0.25 });
+    }
+  }
+
+  // Everything the wizard's lightning can target.
+  function enemies() {
+    const list = [];
+    if (!boss.dead) list.push(boss);
+    for (const m of minions) if (m.hp > 0 && m.spawnT <= 0) list.push(m);
+    for (const c of crystals) if (c.hp > 0) list.push(c);
+    return list;
+  }
+
+  const isAlive = (t) => (t === boss ? !boss.dead : t.hp > 0 && (crystals.includes(t) || minions.includes(t)));
+
+  function hitEnemy(t, amount, x, y, color, opts = {}) {
+    if (t === boss) damageBoss(amount, x, y, color, opts);
+    else damageAdd(t, amount, x, y, color);
   }
 
   function updatePlayer(dt) {
@@ -692,6 +837,8 @@
     p.bootsT = Math.max(0, p.bootsT - dt);
     if (abilityQueued && canAct && p.dodgeT <= 0) useAbility();
     abilityQueued = false;
+    updateZeus(dt);
+    if (canAct) updateField(dt);
 
     if (p.abilityId === "lastDance" && !p.lastDance && p.hp === 1) {
       p.lastDance = true;
@@ -726,7 +873,7 @@
       iy /= len;
     }
 
-    if (dodgeQueued && p.dodgeCd <= 0 && p.dodgeT <= 0 && canAct) {
+    if (dodgeQueued && p.dodgeCd <= 0 && p.dodgeT <= 0 && canAct && !p.beamTarget) {
       p.dodgeT = DODGE.duration;
       p.dodgeCd = dodgeCooldown() + DODGE.duration;
       p.dodgeDx = len ? ix : Math.cos(p.aim);
@@ -742,9 +889,11 @@
     if (dodging) p.dodgeT -= dt;
 
     if (p.cls === "archer") updateBow(dt, dodging, canAct);
-    else updateSword(dt, dodging, canAct);
+    else if (p.cls === "warrior") updateSword(dt, dodging, canAct);
+    else updateStaff(dt, dodging, canAct);
 
     let speed = p.def.speed * moveMul();
+    if (p.beamTarget) speed *= STAFF.moveMul;
     if (p.charging) speed *= BOW.moveMul;
     if (p.blocking) speed *= SHIELD.moveMul;
     if (p.slashT > 0) speed *= 0.7;
@@ -884,6 +1033,81 @@
     }
   }
 
+  function staffTip() {
+    const p = player;
+    const a = staffAngle();
+    return { x: p.x + Math.cos(a) * 26, y: p.y - 6 + Math.sin(a) * 26 };
+  }
+
+  function staffAngle() {
+    const p = player;
+    if (p.beamTarget) return p.aim;
+    const facing = Math.cos(p.aim) >= 0 ? 1 : -1;
+    return -Math.PI / 2 + facing * 0.35;
+  }
+
+  function breakBeam() {
+    const p = player;
+    if (!p.beamTarget) return;
+    const tip = staffTip();
+    burst(tip.x, tip.y, { count: 10, color: p.zeusT > 0 ? ZEUS_COLOR : LIGHTNING_COLOR, speed: 140, size: 2.5, life: 0.3 });
+    p.beamTarget = null;
+    p.beamT = 0;
+    p.beamTick = 0;
+    p.beamChains = [];
+  }
+
+  function updateStaff(dt, dodging, canAct) {
+    const p = player;
+    p.beamShieldCd = Math.max(0, p.beamShieldCd - dt);
+    if (!mouse.left || dodging || !canAct) {
+      breakBeam();
+      return;
+    }
+    const range = staffRange();
+    if (p.beamTarget && (!isAlive(p.beamTarget) || dist(p, p.beamTarget) - p.beamTarget.r > range + (STAFF.breakRange - STAFF.range))) {
+      breakBeam();
+    }
+    if (!p.beamTarget) {
+      // Lock onto the enemy in range closest to the cursor.
+      let best = null;
+      let bestD = Infinity;
+      for (const t of enemies()) {
+        if (dist(p, t) - t.r > range) continue;
+        const d = Math.hypot(t.x - mouse.x, t.y - mouse.y);
+        if (d < bestD) {
+          bestD = d;
+          best = t;
+        }
+      }
+      if (!best) return;
+      p.beamTarget = best;
+      p.beamT = 0;
+      p.beamTick = 0;
+    }
+
+    const t = p.beamTarget;
+    p.aim = angleTo(p, t);
+    p.beamT += dt;
+    p.beamTick -= dt;
+    p.beamChains = enemies()
+      .filter((o) => o !== t && dist(o, t) < STAFF.chainRange)
+      .sort((a, b) => dist(a, t) - dist(b, t))
+      .slice(0, STAFF.chainCount);
+    if (p.beamTick > 0) return;
+    p.beamTick = STAFF.tick;
+
+    const ramp = Math.min(1, p.beamT / STAFF.rampTime);
+    const dps = STAFF.minDps + (STAFF.maxDps - STAFF.minDps) * ramp;
+    const damage = Math.max(1, Math.round(dps * STAFF.tick * damageMul()));
+    const color = p.zeusT > 0 ? ZEUS_COLOR : LIGHTNING_COLOR;
+    const chipShield = t === boss && p.beamShieldCd <= 0;
+    if (chipShield) p.beamShieldCd = STAFF.shieldHitInterval;
+    hitEnemy(t, damage, t.x + rand(-8, 8), t.y - 10, color, { hit: chipShield });
+    const chainDamage = Math.max(1, Math.round(damage * STAFF.chainMul));
+    for (const o of p.beamChains) hitEnemy(o, chainDamage, o.x, o.y - 10, color, { hit: false });
+  }
+
   function slashReaches(t) {
     const p = player;
     const d = dist(p, t);
@@ -893,7 +1117,7 @@
 
   function hurtPlayer(fromX, fromY, color) {
     const p = player;
-    if (!p.alive || p.invuln > 0 || p.dodgeT > 0 || mode !== "playing") return false;
+    if (!p.alive || p.invuln > 0 || p.dodgeT > 0 || p.zeusT > 0 || mode !== "playing") return false;
 
     // Brief invulnerability after an Infernal Shield block so the rest of a spread can't land instantly.
     if (p.infernalShield) {
@@ -907,6 +1131,7 @@
 
     p.hp -= 1;
     p.invuln = PLAYER.invulnTime;
+    breakBeam();
     const a = Math.atan2(p.y - fromY, p.x - fromX);
     p.kx += Math.cos(a) * PLAYER.knockback;
     p.ky += Math.sin(a) * PLAYER.knockback;
@@ -959,6 +1184,14 @@
 
     if (boss.dead) {
       updateBossDeath(dt);
+      return;
+    }
+
+    // Electric Field zaps freeze the boss in place for a moment.
+    boss.zapCd = Math.max(0, boss.zapCd - dt);
+    if (boss.zapT > 0) {
+      boss.zapT -= dt;
+      boss.moving = false;
       return;
     }
 
@@ -1044,7 +1277,10 @@
       if (boss.timer <= 0) fireLaser(enraged);
     } else if (boss.state === "stunned") {
       boss.stunT -= dt;
-      if (boss.stunT <= 0) {
+      if (boss.stunT <= 0 && boss.stunKind !== "shield") {
+        boss.state = "move";
+        boss.attackTimer = 0.6;
+      } else if (boss.stunT <= 0) {
         boss.state = "move";
         boss.shield = bossStats.shieldHits;
         boss.shieldFlash = 0.3;
@@ -1123,13 +1359,14 @@
 
   // `hit: false` marks follow-up damage (burn ticks, a fire arrow's bonus) that
   // shouldn't chip the shield on its own.
-  function damageBoss(amount, x, y, color, { textColor, showText = true, hit = true } = {}) {
+  // `bypass` ignores Hard's shield and Toni's force field (Smite Cannon).
+  function damageBoss(amount, x, y, color, { textColor, showText = true, hit = true, bypass = false } = {}) {
     if (mode !== "playing" || boss.dead) return;
-    if (boss.shield > 0) {
+    if (boss.shield > 0 && !bypass) {
       if (hit) hitBossShield(x, y);
       return;
     }
-    if (crystals.length) {
+    if (crystals.length && !bypass) {
       burst(x, y, { count: 6, color: CRYSTAL_COLOR, speed: 160, size: 2.5, life: 0.25 });
       if (hit && boss.immuneTextCd <= 0) {
         boss.immuneTextCd = 0.6;
@@ -1161,6 +1398,22 @@
     }
   }
 
+  // "shield" stuns restore Hard's shield (and release the shockwave) when they end.
+  // A smite during a shield stun only extends it, so the shield still comes back.
+  function stunBoss(duration, kind) {
+    if (boss.dead) return;
+    if (boss.state === "stunned") {
+      boss.stunT = Math.max(boss.stunT, duration);
+      boss.stunTotal = Math.max(boss.stunTotal, boss.stunT);
+      if (kind === "shield") boss.stunKind = "shield";
+      return;
+    }
+    boss.state = "stunned";
+    boss.attack = null;
+    boss.stunKind = kind;
+    boss.stunT = boss.stunTotal = duration;
+  }
+
   function hitBossShield(x, y) {
     boss.shield -= 1;
     boss.shieldFlash = 0.15;
@@ -1169,9 +1422,7 @@
       floatText(x, y - 10, "BLOCKED", SHIELD_COLOR);
       return;
     }
-    boss.state = "stunned";
-    boss.attack = null;
-    boss.stunT = boss.stunTotal = rand(bossStats.stunMin, bossStats.stunMax);
+    stunBoss(rand(bossStats.stunMin, bossStats.stunMax), "shield");
     burst(boss.x, boss.y, { count: 50, color: SHIELD_COLOR, speed: 340, size: 4, life: 0.6 });
     ring(boss.x, boss.y, 70, SHIELD_COLOR, 36);
     floatText(boss.x, boss.y - 70, "STUNNED!", "#ffe08a");
@@ -1384,6 +1635,7 @@
     for (const c of crystals) {
       c.t += dt;
       c.flash = Math.max(0, c.flash - dt);
+      c.zapCd = Math.max(0, (c.zapCd || 0) - dt);
     }
   }
 
@@ -1392,8 +1644,14 @@
     const fighting = mode === "playing" && player.alive;
     for (const e of minions) {
       e.flash = Math.max(0, e.flash - dt);
+      e.zapCd = Math.max(0, (e.zapCd || 0) - dt);
       if (e.spawnT > 0) {
         e.spawnT -= dt;
+        continue;
+      }
+      if (e.zapT > 0) {
+        e.zapT -= dt;
+        e.moving = false;
         continue;
       }
       e.aim = angleTo(e, player);
@@ -1658,6 +1916,8 @@
       updateCrystals(dt);
       updateMinions(dt);
       updateZoneRains(dt);
+      for (const s of smites) s.t -= dt;
+      smites = smites.filter((s) => s.t > 0);
 
       if (mode === "ending") {
         endTimer -= dt;
@@ -1848,6 +2108,151 @@
     ctx.fillRect(x - 1.5 * s, y - 31 * s, 3 * s, 5 * s);
   }
 
+  function wizardHat(f, c, facing, away) {
+    const { x, y, s } = f;
+    const tip = player.zeusT > 0 ? ZEUS_COLOR : c.accent;
+    ctx.fillStyle = f.flash ? "#fff" : c.tunic;
+    ctx.beginPath();
+    ctx.ellipse(x, y - 25 * s, 12 * s, 3.5 * s, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(x - 8 * s, y - 25 * s);
+    ctx.lineTo(x + 8 * s, y - 25 * s);
+    ctx.lineTo(x - facing * 5 * s, y - 44 * s);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = f.flash ? "#fff" : tip;
+    ctx.fillRect(x - 8 * s, y - 28 * s, 16 * s, 2.5 * s);
+    ctx.beginPath();
+    ctx.arc(x - facing * 5 * s, y - 44 * s, 2 * s, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  function drawStaffGear(f, layer) {
+    const p = player;
+    const { x, y, s } = f;
+    const a = staffAngle();
+    const behind = Math.sin(a) < -0.2 && Math.cos(a) * (Math.cos(p.aim) >= 0 ? 1 : -1) < 0;
+    if ((layer === "back") !== behind) return;
+    const c = f.flash ? FLASH_COLORS : f.colors;
+    const tip = staffTip();
+    const butt = { x: p.x - Math.cos(a) * 14, y: p.y - 6 - Math.sin(a) * 14 };
+    const hand = { x: p.x + Math.cos(a) * 6, y: p.y - 6 + Math.sin(a) * 6 };
+    ctx.lineCap = "round";
+    ctx.strokeStyle = c.skin;
+    ctx.lineWidth = 4 * s;
+    line(x, y - 8 * s, hand.x, hand.y);
+    ctx.strokeStyle = f.flash ? "#fff" : "#6b4a2a";
+    ctx.lineWidth = 3.5 * s;
+    line(butt.x, butt.y, tip.x, tip.y);
+    const color = p.zeusT > 0 ? ZEUS_COLOR : LIGHTNING_COLOR;
+    ctx.save();
+    ctx.fillStyle = color;
+    ctx.shadowColor = color;
+    ctx.shadowBlur = p.beamTarget ? 22 : 10;
+    ctx.beginPath();
+    ctx.arc(tip.x, tip.y, (p.beamTarget ? 6 : 4.5) * s, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // A jagged bolt between two points; regenerated every frame so it crackles.
+  function drawBolt(x1, y1, x2, y2, color, width, jag = 14) {
+    const len = Math.hypot(x2 - x1, y2 - y1);
+    const n = Math.max(3, Math.round(len / 22));
+    const nx = -(y2 - y1) / (len || 1);
+    const ny = (x2 - x1) / (len || 1);
+    const pts = [[x1, y1]];
+    for (let i = 1; i < n; i++) {
+      const t = i / n;
+      const off = rand(-jag, jag);
+      pts.push([x1 + (x2 - x1) * t + nx * off, y1 + (y2 - y1) * t + ny * off]);
+    }
+    pts.push([x2, y2]);
+    const path = () => {
+      ctx.beginPath();
+      ctx.moveTo(pts[0][0], pts[0][1]);
+      for (const [px, py] of pts) ctx.lineTo(px, py);
+      ctx.stroke();
+    };
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 16;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = width;
+    path();
+    ctx.shadowBlur = 0;
+    ctx.strokeStyle = "#fff";
+    ctx.lineWidth = Math.max(1, width * 0.35);
+    path();
+    ctx.restore();
+  }
+
+  function drawWizardLightning() {
+    const p = player;
+    if (!p.alive || p.cls !== "wizard") return;
+    const color = p.zeusT > 0 ? ZEUS_COLOR : LIGHTNING_COLOR;
+    const t = p.beamTarget;
+    if (t) {
+      const tip = staffTip();
+      const ramp = Math.min(1, p.beamT / STAFF.rampTime);
+      const ty = t === boss ? t.y - 6 * BOSS.scale : t.y - 6;
+      drawBolt(tip.x, tip.y, t.x, ty, color, 3 + ramp * 5, 10 + ramp * 6);
+      if (ramp > 0.5) drawBolt(tip.x, tip.y, t.x, ty, color, 2, 18);
+      for (const o of p.beamChains) {
+        drawBolt(t.x, ty, o.x, o === boss ? o.y - 6 * BOSS.scale : o.y - 6, color, 2, 10);
+      }
+    }
+    if (p.fieldT > 0) {
+      const r = ABILITIES.wizard.field.radius;
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      ctx.strokeStyle = LIGHTNING_COLOR;
+      ctx.globalAlpha = 0.25 + 0.15 * Math.sin(clock * 20);
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y + 6, r, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.fillStyle = LIGHTNING_COLOR;
+      ctx.globalAlpha = 0.06;
+      ctx.fill();
+      ctx.restore();
+      for (let i = 0; i < 3; i++) {
+        const a1 = Math.random() * Math.PI * 2;
+        const a2 = a1 + rand(0.4, 1.0);
+        drawBolt(p.x + Math.cos(a1) * r, p.y + 6 + Math.sin(a1) * r, p.x + Math.cos(a2) * r, p.y + 6 + Math.sin(a2) * r, LIGHTNING_COLOR, 1.5, 8);
+      }
+      for (const e of enemies()) {
+        if (e.zapT > 0 && dist(p, e) - e.r <= r) drawBolt(p.x, p.y - 6, e.x, e.y - 10, LIGHTNING_COLOR, 2, 10);
+      }
+    }
+  }
+
+  function drawSmites() {
+    for (const s of smites) {
+      const k = s.t / 0.6;
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      ctx.globalAlpha = k;
+      const g = ctx.createLinearGradient(s.x - 30, 0, s.x + 30, 0);
+      g.addColorStop(0, "rgba(255, 225, 74, 0)");
+      g.addColorStop(0.5, "rgba(255, 245, 190, 0.8)");
+      g.addColorStop(1, "rgba(255, 225, 74, 0)");
+      ctx.fillStyle = g;
+      ctx.fillRect(s.x - 30, 0, 60, s.y + 30);
+      ctx.fillStyle = ZEUS_COLOR;
+      ctx.globalAlpha = k * 0.4;
+      ctx.beginPath();
+      ctx.ellipse(s.x, s.y + 28, 90 * (1.2 - k * 0.5), 30 * (1.2 - k * 0.5), 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+      if (k > 0.4) drawBolt(s.x, 0, s.x, s.y, ZEUS_COLOR, 6 * k, 22);
+    }
+  }
+
   function drawShadow(x, y, s, width = 13) {
     ctx.fillStyle = "rgba(0, 0, 0, 0.35)";
     ctx.beginPath();
@@ -2021,9 +2426,9 @@
       moving: p.moving,
       colors: p.def.colors,
       flash: false,
-      headgear: p.cls === "archer" ? hood : helmet,
+      headgear: { archer: hood, warrior: helmet, wizard: wizardHat }[p.cls],
     };
-    const gear = p.cls === "archer" ? drawBow : drawWarriorGear;
+    const gear = { archer: drawBow, warrior: drawWarriorGear, wizard: drawStaffGear }[p.cls];
 
     drawShadow(p.x, p.y, s);
     drawPlayerAuras();
@@ -2050,6 +2455,7 @@
     if (p.infernalShield) auras.push({ color: "255, 106, 42", radius: 26 });
     if (p.lastDance) auras.push({ color: "255, 59, 92", radius: 30 });
     if (p.bootsT > 0) auras.push({ color: "155, 231, 255", radius: 22 });
+    if (p.zeusT > 0) auras.push({ color: "255, 225, 74", radius: 34 });
     if (!auras.length) return;
 
     ctx.save();
@@ -2788,7 +3194,7 @@
     // Player hearts.
     ctx.textAlign = "left";
     ctx.font = font(13);
-    ctx.fillStyle = player.cls === "archer" ? "#8fe39a" : "#8fb6ff";
+    ctx.fillStyle = { archer: "#8fe39a", warrior: "#8fb6ff", wizard: "#c9a8ff" }[player.cls];
     ctx.fillText(player.def.name.toUpperCase(), 26, 18);
     for (let i = 0; i < player.maxHp; i++) {
       const cx = 36 + i * 26;
@@ -2835,6 +3241,10 @@
         return p.infernalShield ? (p.abilityCd > 0 ? `SHIELD UP · ${cdText}` : "SHIELD UP") : cdText;
       case "lastDance":
         return p.lastDance ? "ACTIVE!" : "PASSIVE · AT 1 HEART";
+      case "field":
+        return p.fieldT > 0 ? `ACTIVE ${p.fieldT.toFixed(1)}s` : cdText;
+      case "zeus":
+        return p.zeusT > 0 ? `ZEUS ${p.zeusT.toFixed(1)}s` : p.zeusSpent ? "SPENT" : "READY · ONE USE";
       default:
         return cdText;
     }
@@ -2845,9 +3255,10 @@
     const a = p.ability;
     const x = 686;
     const w = 124;
-    const active = p.bootsT > 0 || p.infernalShield || p.flameShots > 0 || p.lastDance;
-    const frac = a.passive ? (p.lastDance ? 1 : 0) : p.abilityCd > 0 ? 1 - p.abilityCd / a.cooldown : 1;
-    const ready = !a.passive && p.abilityCd <= 0;
+    const active = p.bootsT > 0 || p.infernalShield || p.flameShots > 0 || p.lastDance || p.fieldT > 0 || p.zeusT > 0;
+    let frac = a.passive ? (p.lastDance ? 1 : 0) : p.abilityCd > 0 ? 1 - p.abilityCd / a.cooldown : 1;
+    if (a.oneUse) frac = p.zeusT > 0 ? p.zeusT / a.duration : p.abilityUsed ? 0 : 1;
+    const ready = !a.passive && p.abilityCd <= 0 && !(a.oneUse && p.abilityUsed);
     const color = active ? "#ff8a3d" : ready ? "#8fe3ff" : "#5a7a8a";
 
     ctx.textAlign = "left";
@@ -2902,6 +3313,8 @@
         drawBossFigure();
       }
       drawLaser();
+      drawWizardLightning();
+      drawSmites();
       drawArrows();
       drawFireballs();
     }

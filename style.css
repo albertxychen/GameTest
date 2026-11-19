@@ -135,7 +135,7 @@ canvas {
   display: flex;
   flex-direction: column;
   justify-content: flex-start;
-  width: min(260px, 32cqw);
+  width: min(250px, 30cqw);
   margin: 0;
   padding: clamp(10px, 1.8cqw, 18px) clamp(12px, 2cqw, 20px);
   text-align: left;
@@ -175,6 +175,11 @@ canvas {
 .class-card[data-class="warrior"] h2,
 .class-title[data-class="warrior"] {
   color: #8fb6ff;
+}
+
+.class-card[data-class="wizard"] h2,
+.class-title[data-class="wizard"] {
+  color: #c9a8ff;
 }
 
 .class-card.ability-card {
