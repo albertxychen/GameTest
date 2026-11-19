@@ -18,6 +18,7 @@
   const gameoverBossHpEl = document.getElementById("gameover-boss-hp");
   const resultClassEls = document.querySelectorAll(".result-class");
   const bossNameEls = document.querySelectorAll(".boss-name");
+  const attemptEls = document.querySelectorAll(".attempt-num");
   const abilityTitleEl = document.getElementById("ability-title");
   const abilityCardsEl = document.getElementById("ability-cards");
   const classDifficultyEl = document.getElementById("class-difficulty");
@@ -561,10 +562,29 @@
     screens.abilities.classList.remove("hidden");
   }
 
+  // Attempts are counted per difficulty and class, kept across page reloads,
+  // and start over after a win.
+  const ATTEMPTS_KEY = "bossArena.attempts";
+  let attempts = {};
+  try {
+    attempts = JSON.parse(localStorage.getItem(ATTEMPTS_KEY)) || {};
+  } catch {}
+  let currentAttempt = 0;
+  const attemptKey = () => `${selectedDifficulty}:${selectedClass}`;
+
+  function saveAttempts() {
+    try {
+      localStorage.setItem(ATTEMPTS_KEY, JSON.stringify(attempts));
+    } catch {}
+  }
+
   function startGame(cls, abilityId) {
     if (mode === "playing" || mode === "ending") return;
     selectedClass = cls;
     selectedAbility = abilityId;
+    currentAttempt = (attempts[attemptKey()] || 0) + 1;
+    attempts[attemptKey()] = currentAttempt;
+    saveAttempts();
     reset(cls, abilityId);
     mode = "playing";
     hideScreens();
@@ -600,7 +620,10 @@
     const summary = `${player.def.name} · ${player.ability.name} · ${DIFFICULTIES[selectedDifficulty].name}`;
     resultClassEls.forEach((el) => (el.textContent = summary));
     bossNameEls.forEach((el) => (el.textContent = bossStats.name));
+    attemptEls.forEach((el) => (el.textContent = currentAttempt));
     if (outcome === "victory") {
+      attempts[attemptKey()] = 0;
+      saveAttempts();
       victoryTimeEl.textContent = fightTime.toFixed(1) + "s";
       victoryHpEl.textContent = player.hp;
       screens.victory.classList.remove("hidden");
