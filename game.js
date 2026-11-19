@@ -164,7 +164,7 @@
         stats: ["Zaps: 6 damage + 0.5s stun", "Lasts 12s", "Cooldown 30s"],
         cooldown: 30,
         duration: 12,
-        radius: 120,
+        radius: 180,
         damage: 6,
         stun: 0.5,
         zapInterval: 0.75,
