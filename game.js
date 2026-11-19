@@ -172,16 +172,19 @@
       },
       zeus: {
         name: "Zeus",
-        desc: "Become the god of lightning for 30s. It costs you dearly afterwards.",
-        stats: ["Invincible, +200% damage & speed", "Lasts 30s · one use", "After: -3 hearts, weaker staff"],
-        oneUse: true,
-        duration: 30,
+        desc: "Passive. When you die, you rise again as Zeus. Kill the boss before it wears off.",
+        stats: ["Triggers on death · once per fight", "Invincible, +200% damage & speed", "20s to win, then you fall"],
+        passive: true,
+        duration: 20,
+        respawnTime: 1.6,
         damageMul: 3,
         speedMul: 3,
-        hpCost: 3,
-        afterDamageMul: 0.7,
-        afterSpeedMul: 0.8,
-        afterRangeMul: 0.75,
+        // Explosion when Zeus begins; ignores shields like Smite Cannon.
+        blastRadius: 230,
+        blastDamage: 150,
+        blastKnockback: 900,
+        shake: 4,
+        countdownFrom: 10,
       },
     },
   };
@@ -410,6 +413,7 @@
 
   let player, boss, arrows, fireballs, shockwaves, rains, particles, texts;
   let crystals, minions, zoneRains, smites;
+  let zeusBlast = null;
 
   function reset(cls, abilityId) {
     bossStats = { ...BOSS, ...DIFFICULTIES[selectedDifficulty].boss };
@@ -462,8 +466,8 @@
       beamChains: [],
       fieldT: 0,
       zeusT: 0,
-      abilityUsed: false,
-      zeusSpent: false,
+      respawnT: 0,
+      zeusUsed: false,
     };
     boss = {
       x: W / 2,
@@ -514,6 +518,7 @@
     minions = [];
     zoneRains = [];
     smites = [];
+    zeusBlast = null;
     rains = [];
     particles = [];
     texts = [];
@@ -730,11 +735,10 @@
     mul *= 1 + p.callStacks * ABILITIES.warrior.call.damage;
     if (p.lastDance) mul *= ABILITIES.warrior.lastDance.damageMul;
     if (p.zeusT > 0) mul *= ABILITIES.wizard.zeus.damageMul;
-    if (p.zeusSpent) mul *= ABILITIES.wizard.zeus.afterDamageMul;
     return mul;
   }
 
-  const staffRange = () => STAFF.range * (player.zeusSpent ? ABILITIES.wizard.zeus.afterRangeMul : 1);
+  const staffRange = () => STAFF.range;
 
   function moveMul() {
     const p = player;
@@ -743,7 +747,6 @@
     if (p.bootsT > 0) mul *= ABILITIES.archer.boots.speedMul;
     if (p.lastDance) mul *= ABILITIES.warrior.lastDance.speedMul;
     if (p.zeusT > 0) mul *= ABILITIES.wizard.zeus.speedMul;
-    if (p.zeusSpent) mul *= ABILITIES.wizard.zeus.afterSpeedMul;
     return mul;
   }
 
@@ -755,11 +758,9 @@
     const p = player;
     const a = p.ability;
     if (a.passive || p.abilityCd > 0) return;
-    if (a.oneUse && p.abilityUsed) return;
     if (p.abilityId === "infernal" && p.infernalShield) return;
     if (p.abilityId === "smite" && boss.dead) return;
-    p.abilityCd = a.cooldown || 0;
-    p.abilityUsed = true;
+    p.abilityCd = a.cooldown;
 
     if (p.abilityId === "rain") {
       const x = clamp(mouse.x, ARENA.x, ARENA.x + ARENA.w);
@@ -788,30 +789,98 @@
     } else if (p.abilityId === "field") {
       p.fieldT = a.duration;
       ring(p.x, p.y, a.radius, LIGHTNING_COLOR, 40);
-    } else if (p.abilityId === "zeus") {
-      p.zeusT = a.duration;
-      ring(p.x, p.y, 90, ZEUS_COLOR, 48);
-      floatText(p.x, p.y - 44, "ZEUS!", ZEUS_COLOR);
-      shake = Math.max(shake, 10);
     }
+  }
+
+  // Zeus revival: lightning strikes the fallen wizard, who rises during respawnTime.
+  function startZeusRespawn() {
+    const p = player;
+    p.zeusUsed = true;
+    p.respawnT = ABILITIES.wizard.zeus.respawnTime;
+    p.hp = 0;
+    p.vx = p.vy = p.kx = p.ky = 0;
+    p.dodgeT = 0;
+    breakBeam();
+    smites.push({ x: p.x, y: p.y, t: 0.6 });
+    burst(p.x, p.y, { count: 40, color: ZEUS_COLOR, speed: 260, size: 3, life: 0.6 });
+    floatText(p.x, p.y - 50, "NOT YET...", ZEUS_COLOR);
+    shake = Math.max(shake, 14);
+  }
+
+  function updateRespawn(dt) {
+    const p = player;
+    const z = ABILITIES.wizard.zeus;
+    p.respawnT -= dt;
+    const a = Math.random() * Math.PI * 2;
+    const r = 70 * (p.respawnT / z.respawnTime);
+    particles.push({
+      x: p.x + Math.cos(a) * r,
+      y: p.y + Math.sin(a) * r,
+      vx: -Math.cos(a) * 120,
+      vy: -Math.sin(a) * 120,
+      life: 0.3,
+      maxLife: 0.3,
+      size: 3,
+      color: Math.random() < 0.5 ? ZEUS_COLOR : "#fff",
+    });
+    if (p.respawnT > 0) return;
+    p.respawnT = 0;
+    p.zeusT = z.duration;
+    smites.push({ x: p.x, y: p.y, t: 0.6 });
+    zeusBlast = { x: p.x, y: p.y, t: 0 };
+    ring(p.x, p.y, z.blastRadius * 0.5, ZEUS_COLOR, 64);
+    ring(p.x, p.y, z.blastRadius * 0.35, "#fff", 40);
+    burst(p.x, p.y, { count: 120, color: ZEUS_COLOR, speed: 620, size: 5, life: 0.9 });
+    burst(p.x, p.y, { count: 60, color: "#ff9a2a", speed: 420, size: 5, life: 1.0 });
+    floatText(p.x, p.y - 50, "ZEUS!", ZEUS_COLOR);
+    shake = 26;
+    for (const t of enemies()) {
+      if (dist(p, t) - t.r > z.blastRadius) continue;
+      hitEnemy(t, z.blastDamage, t.x, t.y - 20, ZEUS_COLOR, { bypass: true, textColor: ZEUS_COLOR });
+      if (t.kind === "minion" || t === boss) {
+        const a = angleTo(p, t);
+        t.kx = Math.cos(a) * z.blastKnockback;
+        t.ky = Math.sin(a) * z.blastKnockback;
+      }
+    }
+    for (const f of fireballs) burst(f.x, f.y, { count: 4, color: ZEUS_COLOR, speed: 100, size: 2.5, life: 0.25 });
+    fireballs = fireballs.filter((f) => dist(f, p) > z.blastRadius);
+  }
+
+  function killPlayer() {
+    const p = player;
+    p.hp = 0;
+    p.alive = false;
+    burst(p.x, p.y, { count: 70, color: p.def.colors.tunic, speed: 360, size: 4, life: 1.0 });
+    burst(p.x, p.y, { count: 40, color: "#ffffff", speed: 260, size: 3, life: 0.8 });
+    shake = 16;
+    beginEnding("gameover");
   }
 
   function updateZeus(dt) {
     const p = player;
+    if (zeusBlast) {
+      zeusBlast.t += dt;
+      if (zeusBlast.t > 0.7) zeusBlast = null;
+    }
     if (p.zeusT <= 0) return;
+    const z = ABILITIES.wizard.zeus;
+    const prevSecond = Math.ceil(p.zeusT);
     p.zeusT -= dt;
+    // Constant rumble, getting heavier in the final countdown with a jolt on every tick.
+    const final = p.zeusT < z.countdownFrom ? 1 - p.zeusT / z.countdownFrom : 0;
+    shake = Math.max(shake, z.shake + final * 4);
+    if (p.zeusT > 0 && p.zeusT < z.countdownFrom && Math.ceil(p.zeusT) !== prevSecond) shake = Math.max(shake, 12);
     if (Math.random() < 0.5) {
       const a = Math.random() * Math.PI * 2;
       particles.push({ x: p.x + Math.cos(a) * 22, y: p.y + Math.sin(a) * 26, vx: 0, vy: -50, life: 0.3, maxLife: 0.3, size: 3, color: ZEUS_COLOR });
     }
     if (p.zeusT > 0) return;
-    const z = ABILITIES.wizard.zeus;
     p.zeusT = 0;
-    p.zeusSpent = true;
-    p.hp = Math.max(1, p.hp - z.hpCost);
-    ring(p.x, p.y, 70, "#8a7a50", 30);
-    floatText(p.x, p.y - 44, `-${z.hpCost} HEARTS`, "#ff4d6d");
-    shake = Math.max(shake, 10);
+    if (mode === "playing" && !boss.dead) {
+      floatText(p.x, p.y - 44, "THE GODS ABANDON YOU", "#ff4d6d");
+      killPlayer();
+    }
   }
 
   // Zaps every enemy inside the field; each enemy can only be zapped every zapInterval.
@@ -858,6 +927,12 @@
     p.slashCd = Math.max(0, p.slashCd - dt);
     p.abilityCd = Math.max(0, p.abilityCd - dt);
     p.bootsT = Math.max(0, p.bootsT - dt);
+    if (p.respawnT > 0) {
+      updateRespawn(dt);
+      abilityQueued = false;
+      dodgeQueued = false;
+      return;
+    }
     if (abilityQueued && canAct && p.dodgeT <= 0) useAbility();
     abilityQueued = false;
     updateZeus(dt);
@@ -1140,7 +1215,7 @@
 
   function hurtPlayer(fromX, fromY, color) {
     const p = player;
-    if (!p.alive || p.invuln > 0 || p.dodgeT > 0 || p.zeusT > 0 || mode !== "playing") return false;
+    if (!p.alive || p.invuln > 0 || p.dodgeT > 0 || p.zeusT > 0 || p.respawnT > 0 || mode !== "playing") return false;
 
     // Brief invulnerability after an Infernal Shield block so the rest of a spread can't land instantly.
     if (p.infernalShield) {
@@ -1165,12 +1240,8 @@
     burst(p.x, p.y, { count: 12, color: "#ff4d6d", speed: 160, size: 3, life: 0.45 });
 
     if (p.hp <= 0) {
-      p.hp = 0;
-      p.alive = false;
-      burst(p.x, p.y, { count: 70, color: p.def.colors.tunic, speed: 360, size: 4, life: 1.0 });
-      burst(p.x, p.y, { count: 40, color: "#ffffff", speed: 260, size: 3, life: 0.8 });
-      shake = 16;
-      beginEnding("gameover");
+      if (p.abilityId === "zeus" && !p.zeusUsed) startZeusRespawn();
+      else killPlayer();
     }
     return true;
   }
@@ -2254,6 +2325,118 @@
     }
   }
 
+  function drawZeusBlast() {
+    if (!zeusBlast) return;
+    const z = ABILITIES.wizard.zeus;
+    const k = zeusBlast.t / 0.7;
+    const r = z.blastRadius * (0.2 + 0.8 * Math.sqrt(k));
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    const g = ctx.createRadialGradient(zeusBlast.x, zeusBlast.y, 0, zeusBlast.x, zeusBlast.y, r);
+    g.addColorStop(0, `rgba(255, 250, 220, ${0.7 * (1 - k)})`);
+    g.addColorStop(0.6, `rgba(255, 225, 74, ${0.45 * (1 - k)})`);
+    g.addColorStop(1, "rgba(255, 150, 40, 0)");
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(zeusBlast.x, zeusBlast.y, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = ZEUS_COLOR;
+    ctx.shadowColor = ZEUS_COLOR;
+    ctx.shadowBlur = 24;
+    ctx.globalAlpha = 1 - k;
+    ctx.lineWidth = 14 * (1 - k) + 2;
+    ctx.beginPath();
+    ctx.arc(zeusBlast.x, zeusBlast.y, r, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+    if (k < 0.5) {
+      for (let i = 0; i < 6; i++) {
+        const a = Math.random() * Math.PI * 2;
+        drawBolt(zeusBlast.x, zeusBlast.y, zeusBlast.x + Math.cos(a) * r, zeusBlast.y + Math.sin(a) * r, ZEUS_COLOR, 3, 16);
+      }
+    }
+  }
+
+  // Screen-space Zeus effects: a dark gold vignette, the blast's white flash,
+  // and a big pulsing countdown for the final seconds.
+  function drawZeusOverlay() {
+    const p = player;
+    const z = ABILITIES.wizard.zeus;
+    if (mode !== "playing" && mode !== "ending") return;
+    if (zeusBlast && zeusBlast.t < 0.25) {
+      ctx.fillStyle = `rgba(255, 245, 200, ${0.55 * (1 - zeusBlast.t / 0.25)})`;
+      ctx.fillRect(0, 0, W, H);
+    }
+    if (p.zeusT <= 0) return;
+
+    const final = p.zeusT < z.countdownFrom;
+    const urgency = final ? 1 - p.zeusT / z.countdownFrom : 0;
+    const frac = p.zeusT % 1 || 1;
+    const beat = final ? Math.pow(frac, 3) : 0;
+    const fadeIn = Math.min(1, (z.duration - p.zeusT) / 0.6);
+
+    // Blackout-style tunnel vision: an ellipse matching the screen's shape, so
+    // every edge closes in evenly. It tightens as time runs out.
+    const breathe = 0.03 * Math.sin(clock * 5) + 0.05 * beat;
+    const inner = Math.max(0.08, 0.34 - 0.18 * urgency - breathe);
+    const outer = 0.62 - 0.06 * urgency;
+    ctx.save();
+    ctx.globalAlpha = fadeIn;
+    ctx.translate(W / 2, H / 2);
+    ctx.scale(W / H, 1);
+    const g = ctx.createRadialGradient(0, 0, H * inner, 0, 0, H * outer);
+    g.addColorStop(0, "rgba(220, 180, 20, 0)");
+    g.addColorStop(0.35, `rgba(210, 170, 15, ${0.3 + 0.15 * urgency})`);
+    g.addColorStop(0.7, `rgba(150, 115, 0, ${0.75 + 0.1 * urgency})`);
+    g.addColorStop(1, "rgba(80, 58, 0, 0.96)");
+    ctx.fillStyle = g;
+    ctx.fillRect(-W, -H, W * 2, H * 2);
+    ctx.restore();
+
+    if (!final) return;
+    const n = Math.ceil(p.zeusT);
+    const red = n <= 3;
+    const color = red ? "#ff3b3b" : ZEUS_COLOR;
+
+    if (red) {
+      ctx.fillStyle = `rgba(255, 30, 30, ${0.18 * beat})`;
+      ctx.fillRect(0, 0, W, H);
+    }
+
+    ctx.save();
+    ctx.translate(W / 2, H / 2);
+    const ringK = 1 - frac;
+    ctx.globalAlpha = Math.max(0, 1 - ringK * 1.6);
+    ctx.strokeStyle = color;
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 20;
+    ctx.lineWidth = 10 * (1 - ringK) + 2;
+    ctx.beginPath();
+    ctx.arc(0, 0, 90 + ringK * 260, 0, Math.PI * 2);
+    ctx.stroke();
+
+    const pop = 1 + 0.8 * Math.pow(frac, 6);
+    ctx.rotate(rand(-0.03, 0.03) * (1 + urgency * 2));
+    ctx.scale(pop, pop);
+    ctx.font = "900 190px 'Trebuchet MS', system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.globalAlpha = 0.6 + 0.4 * frac;
+    ctx.lineJoin = "round";
+    ctx.lineWidth = 14;
+    ctx.strokeStyle = "rgba(30, 12, 0, 0.9)";
+    ctx.strokeText(n, 0, 6);
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 40;
+    ctx.fillStyle = color;
+    ctx.fillText(n, 0, 6);
+    ctx.shadowBlur = 0;
+    ctx.globalAlpha *= 0.3;
+    ctx.fillStyle = "#fff8d0";
+    ctx.fillText(n, 0, 6);
+    ctx.restore();
+  }
+
   function drawSmites() {
     for (const s of smites) {
       const k = s.t / 0.6;
@@ -2463,6 +2646,17 @@
       ctx.scale(0.8, 0.8);
       ctx.translate(-p.x, -p.y - 6);
     }
+    if (p.respawnT > 0) {
+      // Lies fallen, then floats upright as the lightning revives them.
+      const k = 1 - p.respawnT / ABILITIES.wizard.zeus.respawnTime;
+      const lie = Math.max(0, 1 - k * 1.6);
+      const lift = Math.sin(Math.min(1, k * 1.2) * Math.PI) * 14;
+      const facing = Math.cos(p.aim) >= 0 ? 1 : -1;
+      ctx.globalAlpha = 0.45 + 0.55 * k * (0.8 + 0.2 * Math.sin(clock * 40));
+      ctx.translate(p.x, p.y + 20 - lift);
+      ctx.rotate(-facing * lie * Math.PI * 0.5);
+      ctx.translate(-p.x, -p.y - 20);
+    }
     gear(f, "back");
     drawBody(f);
     if (p.bootsT > 0) drawBootWings(f);
@@ -2479,6 +2673,10 @@
     if (p.lastDance) auras.push({ color: "255, 59, 92", radius: 30 });
     if (p.bootsT > 0) auras.push({ color: "155, 231, 255", radius: 22 });
     if (p.zeusT > 0) auras.push({ color: "255, 225, 74", radius: 34 });
+    if (p.respawnT > 0) {
+      const k = 1 - p.respawnT / ABILITIES.wizard.zeus.respawnTime;
+      auras.push({ color: "255, 225, 74", radius: 20 + k * 40 });
+    }
     if (!auras.length) return;
 
     ctx.save();
@@ -3267,7 +3465,8 @@
       case "field":
         return p.fieldT > 0 ? `ACTIVE ${p.fieldT.toFixed(1)}s` : cdText;
       case "zeus":
-        return p.zeusT > 0 ? `ZEUS ${p.zeusT.toFixed(1)}s` : p.zeusSpent ? "SPENT" : "READY · ONE USE";
+        if (p.respawnT > 0) return "RISING...";
+        return p.zeusT > 0 ? "ZEUS!" : "PASSIVE · ON DEATH";
       default:
         return cdText;
     }
@@ -3278,10 +3477,11 @@
     const a = p.ability;
     const x = 686;
     const w = 124;
-    const active = p.bootsT > 0 || p.infernalShield || p.flameShots > 0 || p.lastDance || p.fieldT > 0 || p.zeusT > 0;
+    const active =
+      p.bootsT > 0 || p.infernalShield || p.flameShots > 0 || p.lastDance || p.fieldT > 0 || p.zeusT > 0 || p.respawnT > 0;
     let frac = a.passive ? (p.lastDance ? 1 : 0) : p.abilityCd > 0 ? 1 - p.abilityCd / a.cooldown : 1;
-    if (a.oneUse) frac = p.zeusT > 0 ? p.zeusT / a.duration : p.abilityUsed ? 0 : 1;
-    const ready = !a.passive && p.abilityCd <= 0 && !(a.oneUse && p.abilityUsed);
+    if (p.abilityId === "zeus") frac = p.zeusT > 0 || p.respawnT > 0 ? 1 : 0;
+    const ready = !a.passive && p.abilityCd <= 0;
     const color = active ? "#ff8a3d" : ready ? "#8fe3ff" : "#5a7a8a";
 
     ctx.textAlign = "left";
@@ -3338,13 +3538,17 @@
       drawLaser();
       drawWizardLightning();
       drawSmites();
+      drawZeusBlast();
       drawArrows();
       drawFireballs();
     }
     drawParticles();
     ctx.restore();
 
-    if (mode !== "difficulty" && mode !== "classes" && mode !== "abilities") drawHud();
+    if (mode !== "difficulty" && mode !== "classes" && mode !== "abilities") {
+      drawZeusOverlay();
+      drawHud();
+    }
     drawReticle();
   }
 
