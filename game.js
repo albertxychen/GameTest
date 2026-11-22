@@ -63,7 +63,9 @@
     moveMul: 0.55,
   };
   const SWORD = { duration: 0.2, cooldown: 0.4, range: 82, arc: 2.1, damage: 13, lunge: 170 };
-  const SHIELD = { halfArc: 1.3, moveMul: 0.5 };
+  // After a successful block the shield drops for `cooldown`; `grace` keeps it up
+  // just long enough for the rest of a simultaneous volley to be blocked too.
+  const SHIELD = { halfArc: 1.3, moveMul: 0.5, cooldown: 2, grace: 0.12 };
   // Wizard's lightning: hold left click with an enemy in range. Damage per second
   // ramps from minDps to maxDps over rampTime and resets whenever the beam breaks.
   const STAFF = {
@@ -138,10 +140,12 @@
       },
       infernal: {
         name: "Infernal Shield",
-        desc: "Raise a flaming shield that completely blocks the next attack that hits you.",
-        stats: ["+2 max hearts (7 total)", "Blocks 1 attack per use", "Cooldown 15s"],
+        desc: "Wrap yourself in a blazing force field that absorbs hits. Nothing can push you back.",
+        stats: ["+2 max hearts (7 total)", "Field blocks 5 hits · no knockback", "Cooldown 15s after it breaks"],
         cooldown: 15,
         bonusHp: 2,
+        hits: 5,
+        blockInvuln: 0.5,
       },
       dragonWarrior: {
         name: "Dragon Warrior",
@@ -305,6 +309,7 @@
     ],
   };
   const DRAGON_FIRE = "#ff8a3d";
+  const INFERNAL_COLOR = "#ff7a2a";
 
   const CRYSTAL_COLOR = "#c77dff";
 
@@ -456,7 +461,8 @@
       bootsT: 0,
       bootsShots: 0,
       callStacks: 0,
-      infernalShield: false,
+      infernalHits: 0,
+      infernalFlash: 0,
       dragonsLeft: ability.dragons || 0,
       x: W / 2,
       y: ARENA.y + ARENA.h - 90,
@@ -485,6 +491,8 @@
       slashHit: false,
       slashId: 0,
       blocking: false,
+      blockCd: 0,
+      blockGrace: 0,
       beamTarget: null,
       beamT: 0,
       beamTick: 0,
@@ -784,10 +792,11 @@
     const p = player;
     const a = p.ability;
     if (a.passive || p.abilityCd > 0) return;
-    if (p.abilityId === "infernal" && p.infernalShield) return;
+    if (p.abilityId === "infernal" && p.infernalHits > 0) return;
     if (p.abilityId === "smite" && boss.dead) return;
     if (p.abilityId === "dragonWarrior" && p.dragonsLeft <= 0) return;
-    p.abilityCd = a.cooldown;
+    // Infernal Shield's cooldown starts when the field breaks.
+    if (p.abilityId !== "infernal") p.abilityCd = a.cooldown;
 
     if (p.abilityId === "rain") {
       const x = clamp(mouse.x, ARENA.x, ARENA.x + ARENA.w);
@@ -806,8 +815,12 @@
       floatText(p.x, p.y - 40, `WARRIOR'S CALL x${p.callStacks}`, "#ffcf7a");
       shake = Math.max(shake, 5);
     } else if (p.abilityId === "infernal") {
-      p.infernalShield = true;
-      ring(p.x, p.y, 60, "#ff6a2a", 36);
+      p.infernalHits = a.hits;
+      p.infernalFlash = 0.3;
+      ring(p.x, p.y, 60, INFERNAL_COLOR, 40);
+      burst(p.x, p.y, { count: 30, color: INFERNAL_COLOR, speed: 240, size: 3.5, life: 0.5 });
+      floatText(p.x, p.y - 44, "INFERNAL SHIELD", "#ffb347");
+      shake = Math.max(shake, 6);
     } else if (p.abilityId === "smite") {
       smites.push({ x: boss.x, y: boss.y, t: 0.6 });
       damageBoss(Math.round(a.damage * damageMul()), boss.x, boss.y - 20, ZEUS_COLOR, { bypass: true, textColor: ZEUS_COLOR });
@@ -967,7 +980,8 @@
     abilityQueued = false;
     updateZeus(dt);
     if (canAct) updateField(dt);
-    if (p.infernalShield && Math.random() < 0.4) {
+    p.infernalFlash = Math.max(0, p.infernalFlash - dt);
+    if (p.infernalHits > 0 && Math.random() < 0.4) {
       const a = Math.random() * Math.PI * 2;
       particles.push({
         x: p.x + Math.cos(a) * 20,
@@ -1121,7 +1135,10 @@
 
   function updateSword(dt, dodging, canAct) {
     const p = player;
-    p.blocking = (mouse.right || isDown("block")) && !dodging && p.slashT <= 0 && canAct;
+    p.blockCd = Math.max(0, p.blockCd - dt);
+    p.blockGrace = Math.max(0, p.blockGrace - dt);
+    const shieldReady = p.blockCd <= 0 || p.blockGrace > 0;
+    p.blocking = (mouse.right || isDown("block")) && shieldReady && !dodging && p.slashT <= 0 && canAct;
 
     if (mouse.left && !p.blocking && !dodging && p.slashCd <= 0 && canAct) {
       p.slashT = SWORD.duration;
@@ -1242,13 +1259,23 @@
     const p = player;
     if (!p.alive || p.invuln > 0 || p.dodgeT > 0 || p.zeusT > 0 || p.respawnT > 0 || mode !== "playing") return false;
 
-    // Brief invulnerability after an Infernal Shield block so the rest of a spread can't land instantly.
-    if (p.infernalShield) {
-      p.infernalShield = false;
-      p.invuln = 0.5;
-      ring(p.x, p.y, 45, "#ff6a2a", 28);
-      floatText(p.x, p.y - 36, "BLOCKED", "#ffb347");
+    // Brief invulnerability after an Infernal Shield block so one spread only costs one block.
+    if (p.infernalHits > 0) {
+      const inf = ABILITIES.warrior.infernal;
+      p.infernalHits -= 1;
+      p.infernalFlash = 0.15;
+      p.invuln = inf.blockInvuln;
+      burst(p.x, p.y, { count: 14, color: INFERNAL_COLOR, speed: 220, size: 3, life: 0.35 });
       shake = Math.max(shake, 4);
+      if (p.infernalHits > 0) {
+        floatText(p.x, p.y - 36, "BLOCKED", "#ffb347");
+      } else {
+        p.abilityCd = inf.cooldown;
+        ring(p.x, p.y, 55, INFERNAL_COLOR, 36);
+        burst(p.x, p.y, { count: 40, color: INFERNAL_COLOR, speed: 320, size: 4, life: 0.55 });
+        floatText(p.x, p.y - 44, "SHIELD BROKEN", "#ff6a2a");
+        shake = Math.max(shake, 8);
+      }
       return true;
     }
 
@@ -1271,16 +1298,24 @@
     return true;
   }
 
+  const immovable = () => player.infernalHits > 0;
+
   // Shield block: no damage, just a shove and sparks.
   function blockHit(fromX, fromY, force) {
     const p = player;
     const a = Math.atan2(p.y - fromY, p.x - fromX);
-    p.kx += Math.cos(a) * force;
-    p.ky += Math.sin(a) * force;
+    if (!immovable()) {
+      p.kx += Math.cos(a) * force;
+      p.ky += Math.sin(a) * force;
+    }
     const sx = p.x + Math.cos(p.aim) * 16;
     const sy = p.y - 8 + Math.sin(p.aim) * 16;
     burst(sx, sy, { count: 14, color: "#ffe08a", speed: 220, size: 2.5, life: 0.3 });
     shake = Math.max(shake, 4);
+    if (p.blockCd <= 0) {
+      p.blockCd = SHIELD.cooldown;
+      p.blockGrace = SHIELD.grace;
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -2312,10 +2347,13 @@
         w.hit = true;
         player.dodgeT = 0;
         player.blocking = false;
+        const shielded = immovable();
         hurtPlayer(w.x, w.y, SHIELD_COLOR);
         const a = Math.atan2(player.y - w.y, player.x - w.x);
-        player.kx = Math.cos(a) * SHOCKWAVE.knockback;
-        player.ky = Math.sin(a) * SHOCKWAVE.knockback;
+        if (!shielded) {
+          player.kx = Math.cos(a) * SHOCKWAVE.knockback;
+          player.ky = Math.sin(a) * SHOCKWAVE.knockback;
+        }
       }
     }
     shockwaves = shockwaves.filter((w) => w.r < SHOCKWAVE.maxRadius);
@@ -3013,7 +3051,6 @@
     const p = player;
     const pulse = 1 + Math.sin(clock * 8) * 0.08;
     const auras = [];
-    if (p.infernalShield) auras.push({ color: "255, 106, 42", radius: 26 });
     if (p.bootsT > 0) auras.push({ color: "155, 231, 255", radius: 22 });
     if (p.zeusT > 0) auras.push({ color: "255, 225, 74", radius: 34 });
     if (p.respawnT > 0) {
@@ -3595,29 +3632,72 @@
   }
 
   function drawBossShield(x, y, s) {
-    const cy = y - 6 * s;
-    const pulse = 0.5 + Math.sin(boss.t * 4) * 0.5;
+    drawForceShield({
+      x, cy: y - 6 * s, rx: 25 * s, ry: 30 * s, pipY: y - 35 * s,
+      color: SHIELD_COLOR, flash: boss.shieldFlash > 0, t: boss.t, hits: boss.shield, total: bossStats.shieldHits,
+    });
+  }
+
+  // A small shield icon with a refilling arc under the warrior while the block is on cooldown.
+  function drawBlockCooldown() {
+    const p = player;
+    if (p.cls !== "warrior" || p.blockCd <= 0 || !p.alive) return;
+    const k = 1 - p.blockCd / SHIELD.cooldown;
+    const x = p.x;
+    const y = p.y + 36;
+    ctx.save();
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = "rgba(0, 0, 0, 0.55)";
+    ctx.beginPath();
+    ctx.arc(x, y, 8, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.strokeStyle = "#ffe08a";
+    ctx.beginPath();
+    ctx.arc(x, y, 8, -Math.PI / 2, -Math.PI / 2 + k * Math.PI * 2);
+    ctx.stroke();
+    ctx.fillStyle = "rgba(255, 224, 138, 0.5)";
+    ctx.beginPath();
+    ctx.moveTo(x, y - 4.5);
+    ctx.lineTo(x + 4, y - 3);
+    ctx.lineTo(x + 3.5, y + 1.5);
+    ctx.lineTo(x, y + 4.5);
+    ctx.lineTo(x - 3.5, y + 1.5);
+    ctx.lineTo(x - 4, y - 3);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function drawInfernalShield() {
+    const p = player;
+    if (p.infernalHits <= 0 || !p.alive) return;
+    drawForceShield({
+      x: p.x, cy: p.y - 2, rx: 24, ry: 30, pipY: p.y - 44, gap: 12,
+      color: INFERNAL_COLOR, flash: p.infernalFlash > 0, t: clock, hits: p.infernalHits, total: ABILITIES.warrior.infernal.hits,
+    });
+  }
+
+  // Glowing bubble with one pip per remaining hit floating above it.
+  function drawForceShield({ x, cy, rx, ry, pipY, gap = 16, color, flash, t, hits, total }) {
+    const pulse = 0.5 + Math.sin(t * 4) * 0.5;
     ctx.save();
     ctx.globalCompositeOperation = "lighter";
-    ctx.shadowColor = SHIELD_COLOR;
+    ctx.shadowColor = color;
     ctx.shadowBlur = 16;
-    ctx.fillStyle = SHIELD_COLOR;
-    ctx.globalAlpha = boss.shieldFlash > 0 ? 0.35 : 0.08 + pulse * 0.05;
+    ctx.fillStyle = color;
+    ctx.globalAlpha = flash ? 0.35 : 0.08 + pulse * 0.05;
     ctx.beginPath();
-    ctx.ellipse(x, cy, 25 * s, 30 * s, 0, 0, Math.PI * 2);
+    ctx.ellipse(x, cy, rx, ry, 0, 0, Math.PI * 2);
     ctx.fill();
-    ctx.strokeStyle = boss.shieldFlash > 0 ? "#fff" : SHIELD_COLOR;
+    ctx.strokeStyle = flash ? "#fff" : color;
     ctx.lineWidth = 2.5;
     ctx.globalAlpha = 0.55 + pulse * 0.25;
     ctx.stroke();
     ctx.restore();
 
-    // One pip per remaining hit, floating above the head.
     ctx.save();
-    const total = bossStats.shieldHits;
-    const gap = 16;
     const startX = x - ((total - 1) * gap) / 2;
-    const py = y - 35 * s;
+    const py = pipY;
     for (let i = 0; i < total; i++) {
       const px = startX + i * gap;
       ctx.beginPath();
@@ -3628,9 +3708,9 @@
       ctx.lineTo(px - 5, py + 2);
       ctx.lineTo(px - 5, py - 3);
       ctx.closePath();
-      if (i < boss.shield) {
-        ctx.fillStyle = SHIELD_COLOR;
-        ctx.shadowColor = SHIELD_COLOR;
+      if (i < hits) {
+        ctx.fillStyle = color;
+        ctx.shadowColor = color;
         ctx.shadowBlur = 8;
         ctx.fill();
         ctx.shadowBlur = 0;
@@ -3943,7 +4023,7 @@
       case "call":
         return `x${p.callStacks} STACKS · ${cdText}`;
       case "infernal":
-        return p.infernalShield ? (p.abilityCd > 0 ? `SHIELD UP · ${cdText}` : "SHIELD UP") : cdText;
+        return p.infernalHits > 0 ? `SHIELD ${p.infernalHits}/${ABILITIES.warrior.infernal.hits}` : cdText;
       case "dragonWarrior":
         if (p.dragonsLeft > 0) return `${p.dragonsLeft} LEFT · ${cdText}`;
         return dragons.length ? `${dragons.length} FIGHTING` : "NO DRAGONS LEFT";
@@ -3963,7 +4043,7 @@
     const x = 686;
     const w = 124;
     const active =
-      p.bootsT > 0 || p.infernalShield || p.flameShots > 0 || dragons.length > 0 || p.fieldT > 0 || p.zeusT > 0 || p.respawnT > 0;
+      p.bootsT > 0 || p.infernalHits > 0 || p.flameShots > 0 || dragons.length > 0 || p.fieldT > 0 || p.zeusT > 0 || p.respawnT > 0;
     let frac = a.passive ? 0 : p.abilityCd > 0 ? 1 - p.abilityCd / a.cooldown : 1;
     if (p.abilityId === "zeus") frac = p.zeusT > 0 || p.respawnT > 0 ? 1 : 0;
     if (p.abilityId === "dragonWarrior" && p.dragonsLeft <= 0) frac = 0;
@@ -4022,6 +4102,8 @@
         drawPlayer();
         drawBossFigure();
       }
+      drawInfernalShield();
+      drawBlockCooldown();
       drawDragonBreath();
       for (const d of [...dragons].sort((a, b) => a.y - b.y)) drawDragon(d);
       drawLaser();
